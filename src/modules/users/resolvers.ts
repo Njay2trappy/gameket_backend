@@ -20,6 +20,7 @@ export const userFieldResolvers = {
       storeId: storeDoc.storeId,
       storeName: storeDoc.storeName,
       isActive: storeDoc.isActive,
+      isPromoted: storeDoc.isPromoted,
       type: storeDoc.type,
       totalSales: storeDoc.totalSales,
       positiveReviews: storeDoc.positiveReviews,
@@ -65,6 +66,23 @@ export const userFieldResolvers = {
       available: p.available,
       sold: p.sold,
       createdAt: p.createdAt,
+    }));
+  },
+  transactions: async (parent: Record<string, unknown>) => {
+    const walletsDB = getWalletsDB();
+    const txDocs = await walletsDB
+      .collection<Transaction>("Transactions")
+      .find({ userId: parent.id as string })
+      .sort({ createdAt: -1 })
+      .toArray();
+    if (!txDocs.length) return null;
+    return txDocs.map((t) => ({
+      id: t.id,
+      type: t.type,
+      status: t.status,
+      method: t.method,
+      amount: t.amount,
+      createdAt: t.createdAt,
     }));
   },
 };

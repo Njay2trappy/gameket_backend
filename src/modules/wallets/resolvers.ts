@@ -2,8 +2,17 @@ import { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB } from "../../db.js";
 import { getWalletsDB } from "../../db.js";
-import type { User, Balance, Deposit } from "../../types.js";
+import type { User, Balance, Deposit, Transaction } from "../../types.js";
 import type { Context } from "../../index.js";
+
+function encodeCursor(index: number): string {
+  return Buffer.from(`cursor:${index}`).toString("base64");
+}
+
+function decodeCursor(cursor: string): number {
+  const decoded = Buffer.from(cursor, "base64").toString("utf-8");
+  return parseInt(decoded.replace("cursor:", ""), 10);
+}
 
 export const walletsQueries = {
   getUserWallets: async (_: unknown, __: unknown, context: Context) => {
@@ -36,6 +45,78 @@ export const walletsQueries = {
         availableBalance: parseFloat(balance.availableBalance.toFixed(2)),
         suspendedBalance: parseFloat(balance.suspendedBalance.toFixed(2)),
         methods: balance.methods,
+      },
+    };
+  },
+
+  getUserTransactions: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+
+    const allTransactions = await walletsDB
+      .collection<Transaction>("Transactions")
+      .find({ userId })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allTransactions.length;
+    let start = 0;
+    let end = total;
+
+    if (first != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + first, total);
+    } else if (first != null) {
+      end = Math.min(first, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allTransactions.slice(start, end);
+
+    const edges = sliced.map((t, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        id: t.id,
+        type: t.type,
+        status: t.status,
+        method: t.method,
+        amount: t.amount,
+        createdAt: t.createdAt,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} transaction(s) found`,
+      user,
+      transactions: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
       },
     };
   },

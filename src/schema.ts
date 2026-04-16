@@ -23,6 +23,7 @@ const baseTypeDefs = `#graphql
     wallet: Wallet
     premium: PremiumDetails
     products: [ProductDetails!]
+    transactions: [TransactionDetails!]
   }
 
   type Query {
