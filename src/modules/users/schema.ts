@@ -22,9 +22,6 @@ export const usersTypeDefs = `#graphql
     registered: String!
     isStore: Boolean!
     avatar: String
-    store: StoreDetails
-    wallet: Wallet
-    premium: PremiumDetails
   }
 
   type UserDetailsResponse {
@@ -32,6 +29,10 @@ export const usersTypeDefs = `#graphql
     success: Boolean!
     message: String!
     user: UserDetails
+    store: StoreDetails
+    wallet: Wallet
+    premium: PremiumDetails
+    products: [ProductDetails!]
   }
 
   type GetStoreDetailsResponse {

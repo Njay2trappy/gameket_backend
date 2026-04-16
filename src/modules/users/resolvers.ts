@@ -1,7 +1,8 @@
 
+import crypto from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getCatalogsDB, getWalletsDB } from "../../db.js";
-import type { User, Account, Store, Balance, Premium, Transaction } from "../../types.js";
+import type { User, Account, Store, Balance, Premium, Transaction, Product } from "../../types.js";
 import type { Context } from "../../index.js";
 
 export const usersQueries = {
@@ -71,6 +72,29 @@ export const usersQueries = {
         }
       : null;
 
+    const productDocs = await catalogsDB
+      .collection<Product>("Products")
+      .find({ userId })
+      .toArray();
+
+    const products = productDocs.length
+      ? productDocs.map((p) => ({
+          productId: p.productId,
+          catalog: p.catalog,
+          category: p.category,
+          region: p.region,
+          name: p.name,
+          description: p.description,
+          marketPrice: p.marketPrice,
+          price: p.price,
+          discount: p.discount,
+          isActive: p.isActive,
+          available: p.available,
+          sold: p.sold,
+          createdAt: p.createdAt,
+        }))
+      : null;
+
     return {
       code: 200,
       success: true,
@@ -88,10 +112,11 @@ export const usersQueries = {
         registered: user.registered,
         isStore: user.isStore,
         avatar: user.avatar,
-        store,
-        wallet,
-        premium,
       },
+      store,
+      wallet,
+      premium,
+      products,
     };
   },
 
@@ -232,7 +257,7 @@ export const usersMutations = {
 
     const transaction: Transaction = {
       userId,
-      transactionId: crypto.randomUUID(),
+      id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
       type: "Premium subscription",
       status: "completed",
       method: "balance",

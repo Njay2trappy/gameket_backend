@@ -62,7 +62,7 @@ export interface Premium {
 
 export interface Transaction {
   userId: string;
-  transactionId: string;
+  id: string;
   type: string;
   status: string;
   method: string;
@@ -82,6 +82,11 @@ export interface Product {
   marketPrice: number;
   price: number;
   discount: number;
+  isActive: boolean;
+  available: number;
+  sold: number;
+  availableCodes: string[];
+  soldCodes: string[];
   createdAt: string;
 }
 
