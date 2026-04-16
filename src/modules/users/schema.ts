@@ -1,14 +1,12 @@
 export const usersTypeDefs = `#graphql
-  type PaymentMethod {
-    name: String!
-    address: String!
+  type StoreDetails {
+    storeId: ID!
+    storeName: String!
     isActive: Boolean!
-  }
-
-  type Wallet {
-    availableBalance: Float!
-    suspendedBalance: Float!
-    methods: [PaymentMethod!]!
+    type: String!
+    totalSales: Int!
+    positiveReviews: Int!
+    negativeReviews: Int!
   }
 
   type UserDetails {
@@ -24,7 +22,9 @@ export const usersTypeDefs = `#graphql
     registered: String!
     isStore: Boolean!
     avatar: String
+    store: StoreDetails
     wallet: Wallet
+    premium: PremiumDetails
   }
 
   type UserDetailsResponse {
@@ -34,7 +34,33 @@ export const usersTypeDefs = `#graphql
     user: UserDetails
   }
 
+  type GetStoreDetailsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    store: StoreDetails
+  }
+
+  type PremiumDetails {
+    subscribedAt: String!
+    expiresAt: String!
+    isActive: Boolean!
+  }
+
+  type GetPremiumResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    premium: PremiumDetails
+  }
+
   extend type Query {
     getUserDetails: UserDetailsResponse!
+    getStoreDetails: GetStoreDetailsResponse!
+    getPremium: GetPremiumResponse!
+  }
+
+  extend type Mutation {
+    buyPremium: GetPremiumResponse!
   }
 `;

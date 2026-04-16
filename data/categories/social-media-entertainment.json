@@ -1,0 +1,87 @@
+{
+  "id": "SME",
+  "title": "Social Media / Entertainment",
+  "icon": "/images/vr-glasses.png",
+  "categories": [
+    {
+      "slug": "amazon-prime",
+      "name": "Amazon Prime"
+    },
+    {
+      "slug": "boomplay",
+      "name": "Boomplay"
+    },
+    {
+      "slug": "discord",
+      "name": "Discord"
+    },
+    {
+      "slug": "disney",
+      "name": "Disney"
+    },
+    {
+      "slug": "facebook",
+      "name": "Facebook"
+    },
+    {
+      "slug": "huawei",
+      "name": "HUAWEI"
+    },
+    {
+      "slug": "instagram",
+      "name": "Instagram"
+    },
+    {
+      "slug": "iptv",
+      "name": "IPTV"
+    },
+    {
+      "slug": "netflix",
+      "name": "Netflix"
+    },
+    {
+      "slug": "others",
+      "name": "Others"
+    },
+    {
+      "slug": "skype",
+      "name": "Skype"
+    },
+    {
+      "slug": "snapchat",
+      "name": "Snapchat"
+    },
+    {
+      "slug": "spotify",
+      "name": "Spotify"
+    },
+    {
+      "slug": "telegram",
+      "name": "Telegram"
+    },
+    {
+      "slug": "tiktok",
+      "name": "TIKTOK"
+    },
+    {
+      "slug": "tinder",
+      "name": "Tinder"
+    },
+    {
+      "slug": "twitch",
+      "name": "Twitch"
+    },
+    {
+      "slug": "twitter",
+      "name": "Twitter (X)"
+    },
+    {
+      "slug": "whatsapp",
+      "name": "WhatsApp"
+    },
+    {
+      "slug": "youtube",
+      "name": "YouTube"
+    }
+  ]
+}

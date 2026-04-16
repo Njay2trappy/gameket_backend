@@ -3,6 +3,7 @@ import { MongoClient, Db } from "mongodb";
 let client: MongoClient;
 let db: Db;
 let walletsDb: Db;
+let catalogsDb: Db;
 
 export async function connectDB(): Promise<Db> {
   const uri = process.env.MONGODB_URI;
@@ -14,6 +15,7 @@ export async function connectDB(): Promise<Db> {
   await client.connect();
   db = client.db("Main");
   walletsDb = client.db("Wallets");
+  catalogsDb = client.db("Catalogs");
 
   console.log("✅ Connected to MongoDB");
   return db;
@@ -31,6 +33,13 @@ export function getWalletsDB(): Db {
     throw new Error("Database not initialized. Call connectDB() first.");
   }
   return walletsDb;
+}
+
+export function getCatalogsDB(): Db {
+  if (!catalogsDb) {
+    throw new Error("Database not initialized. Call connectDB() first.");
+  }
+  return catalogsDb;
 }
 
 export async function closeDB(): Promise<void> {

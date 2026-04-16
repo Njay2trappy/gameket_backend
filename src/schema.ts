@@ -1,6 +1,7 @@
 import { authTypeDefs } from "./modules/auth/schema.js";
 import { usersTypeDefs } from "./modules/users/schema.js";
 import { walletsTypeDefs } from "./modules/wallets/schema.js";
+import { catalogsTypeDefs } from "./modules/catalogs/schema.js";
 
 const baseTypeDefs = `#graphql
   type User {
@@ -27,5 +28,5 @@ const baseTypeDefs = `#graphql
   }
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, usersTypeDefs, walletsTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, usersTypeDefs, walletsTypeDefs, catalogsTypeDefs];
 

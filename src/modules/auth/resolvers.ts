@@ -1,9 +1,10 @@
 import { v4 as uuidv4 } from "uuid";
+import { randomInt } from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { GraphQLError } from "graphql";
-import { getDB, getWalletsDB } from "../../db.js";
-import type { User, Account, Balance } from "../../types.js";
+import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
+import type { User, Account, Balance, Store } from "../../types.js";
 import type { Context } from "../../index.js";
 
 export const authQueries = {};
@@ -100,6 +101,8 @@ export const authMutations = {
       twoFactorAuth: false,
       lastLogin: null,
       tokenVersion: 0,
+      otp: null,
+      otpExpiresAt: null,
     };
 
     await users.insertOne(user);
@@ -117,6 +120,24 @@ export const authMutations = {
     };
 
     await balances.insertOne(balance);
+
+    // Create store in Catalogs database
+    const catalogsDb = getCatalogsDB();
+    const stores = catalogsDb.collection<Store>("Stores");
+
+    const store: Store = {
+      userId,
+      storeId: uuidv4(),
+      storeName: username,
+      isActive: false,
+      type: "basic",
+      totalSales: 0,
+      positiveReviews: 0,
+      negativeReviews: 0,
+      reviews: [],
+    };
+
+    await stores.insertOne(store);
 
     return { code: 201, success: true, message: "Registration successful", user: { ...user, twoFactorAuth: false } };
   },
@@ -179,7 +200,7 @@ export const authMutations = {
     context: Context
   ) => {
     if (!context.user) {
-      throw new GraphQLError("Authentication required", {
+      throw new GraphQLError(context.authError || "Authentication required", {
         extensions: { code: "UNAUTHENTICATED" },
       });
     }
@@ -237,7 +258,7 @@ export const authMutations = {
     context: Context
   ) => {
     if (!context.user) {
-      throw new GraphQLError("Authentication required", {
+      throw new GraphQLError(context.authError || "Authentication required", {
         extensions: { code: "UNAUTHENTICATED" },
       });
     }
@@ -264,5 +285,90 @@ export const authMutations = {
       : "Two-factor authentication disabled";
 
     return { code: 200, success: true, message, twoFactorAuth: newValue };
+  },
+
+  sendVerification: async (
+    _: unknown,
+    { input }: { input: { email: string } }
+  ) => {
+    const email = input.email.trim().toLowerCase();
+
+    const db = getDB();
+    const accounts = db.collection<Account>("accounts");
+    const users = db.collection<User>("users");
+
+    const account = await accounts.findOne({ email });
+    if (!account) {
+      // Return generic success to prevent email enumeration
+      return { code: 200, success: true, message: "If the email exists, a verification code has been sent" };
+    }
+
+    const user = await users.findOne({ id: account.userId });
+    if (user?.isVerified) {
+      return { code: 400, success: false, message: "Account is already verified" };
+    }
+
+    // Check if an active OTP already exists
+    if (account.otp && account.otpExpiresAt && new Date(account.otpExpiresAt) > new Date()) {
+      return { code: 429, success: false, message: "A verification code has already been sent. Please wait until it expires before requesting a new one" };
+    }
+
+    // Generate 6-digit OTP
+    const otp = String(randomInt(100000, 999999));
+    const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    await accounts.updateOne(
+      { email },
+      { $set: { otp, otpExpiresAt } }
+    );
+
+    return { code: 200, success: true, message: "If the email exists, a verification code has been sent" };
+  },
+
+  completeVerification: async (
+    _: unknown,
+    { input }: { input: { email: string; otp: string } }
+  ) => {
+    const email = input.email.trim().toLowerCase();
+    const otp = input.otp.trim();
+
+    const db = getDB();
+    const accounts = db.collection<Account>("accounts");
+    const users = db.collection<User>("users");
+
+    const account = await accounts.findOne({ email });
+    if (!account) {
+      return { code: 400, success: false, message: "Invalid verification details" };
+    }
+
+    if (!account.otp || !account.otpExpiresAt) {
+      return { code: 400, success: false, message: "No verification code was requested" };
+    }
+
+    if (new Date() > new Date(account.otpExpiresAt)) {
+      // Clear expired OTP
+      await accounts.updateOne(
+        { email },
+        { $set: { otp: null, otpExpiresAt: null } }
+      );
+      return { code: 400, success: false, message: "Verification code has expired" };
+    }
+
+    if (account.otp !== otp) {
+      return { code: 400, success: false, message: "Invalid verification code" };
+    }
+
+    // Clear OTP and mark user as verified
+    await accounts.updateOne(
+      { email },
+      { $set: { otp: null, otpExpiresAt: null } }
+    );
+
+    await users.updateOne(
+      { id: account.userId },
+      { $set: { isVerified: true } }
+    );
+
+    return { code: 200, success: true, message: "Account verified successfully" };
   },
 };

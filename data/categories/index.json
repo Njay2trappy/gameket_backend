@@ -1,0 +1,39 @@
+{
+  "groups": [
+    {
+      "id": "gameVouchers",
+      "title": "Game Vouchers",
+      "icon": "/images/white-controller.png",
+      "file": "game-vouchers.json",
+      "categoryCount": 57
+    },
+    {
+      "id": "giftCards",
+      "title": "Gift Cards",
+      "icon": "/images/grey-bank-card.png",
+      "file": "gift-cards.json",
+      "categoryCount": 48
+    },
+    {
+      "id": "directTopUp",
+      "title": "Direct Top Up",
+      "icon": "/images/mobile-with-card.png",
+      "file": "direct-top-up.json",
+      "categoryCount": 14
+    },
+    {
+      "id": "prepaid",
+      "title": "Prepaid",
+      "icon": "/images/prepaid-card.png",
+      "file": "prepaid.json",
+      "categoryCount": 16
+    },
+    {
+      "id": "SME",
+      "title": "Social Media / Entertainment",
+      "icon": "/images/vr-glasses.png",
+      "file": "social-media-entertainment.json",
+      "categoryCount": 20
+    }
+  ]
+}

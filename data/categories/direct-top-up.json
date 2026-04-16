@@ -1,0 +1,63 @@
+{
+  "id": "directTopUp",
+  "title": "Direct Top Up",
+  "icon": "/images/mobile-with-card.png",
+  "categories": [
+    {
+      "slug": "8balls-pool",
+      "name": "8balls pool"
+    },
+    {
+      "slug": "apeuni",
+      "name": "Apeuni"
+    },
+    {
+      "slug": "codm",
+      "name": "CODM"
+    },
+    {
+      "slug": "cod-warzone",
+      "name": "COD WARZONE"
+    },
+    {
+      "slug": "efootball",
+      "name": "EFOOTBALL"
+    },
+    {
+      "slug": "farlight",
+      "name": "FARLIGHT"
+    },
+    {
+      "slug": "free-fire",
+      "name": "Free Fire"
+    },
+    {
+      "slug": "mobile-legends",
+      "name": "Mobile Legends"
+    },
+    {
+      "slug": "others",
+      "name": "Others"
+    },
+    {
+      "slug": "pocket-master",
+      "name": "Pocket Master"
+    },
+    {
+      "slug": "pubg",
+      "name": "PUBG"
+    },
+    {
+      "slug": "pubg-new-state",
+      "name": "PUBG NEW STATE"
+    },
+    {
+      "slug": "roblox",
+      "name": "Roblox"
+    },
+    {
+      "slug": "xbox",
+      "name": "Xbox"
+    }
+  ]
+}

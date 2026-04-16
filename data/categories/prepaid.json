@@ -1,0 +1,71 @@
+{
+  "id": "prepaid",
+  "title": "Prepaid",
+  "icon": "/images/prepaid-card.png",
+  "categories": [
+    {
+      "slug": "astropay",
+      "name": "Astropay"
+    },
+    {
+      "slug": "express-vpn",
+      "name": "Express VPN"
+    },
+    {
+      "slug": "facebook-vouchers",
+      "name": "Facebook Vouchers"
+    },
+    {
+      "slug": "google-adwords",
+      "name": "Google Adwords"
+    },
+    {
+      "slug": "gpay",
+      "name": "GPay"
+    },
+    {
+      "slug": "jetoncash",
+      "name": "Jetoncash"
+    },
+    {
+      "slug": "master-card",
+      "name": "Master Card"
+    },
+    {
+      "slug": "mint",
+      "name": "MINT"
+    },
+    {
+      "slug": "neosurf",
+      "name": "Neosurf"
+    },
+    {
+      "slug": "nord-vpn",
+      "name": "Nord VPN"
+    },
+    {
+      "slug": "others",
+      "name": "Others"
+    },
+    {
+      "slug": "perfect-money",
+      "name": "Perfect Money"
+    },
+    {
+      "slug": "vanilla",
+      "name": "Vanilla"
+    },
+    {
+      "slug": "verve",
+      "name": "Verve"
+    },
+    {
+      "slug": "visa",
+      "name": "Visa"
+    },
+    {
+      "slug": "windscribe",
+      "name": "Windscribe"
+    }
+  ]
+}

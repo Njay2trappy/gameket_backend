@@ -12,6 +12,7 @@ const IS_PROD = process.env.NODE_ENV === "production";
 
 export interface Context {
   user: { userId: string; email: string } | null;
+  authError: string | null;
 }
 
 async function main() {
@@ -27,31 +28,38 @@ async function main() {
     listen: { port: PORT },
     context: async ({ req }) => {
       const auth = req.headers.authorization || "";
-      if (auth.startsWith("Bearer ")) {
-        const token = auth.slice(7);
-        try {
-          const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
-            userId: string;
-            email: string;
-            tokenVersion: number;
-          };
-
-          // Verify tokenVersion matches the DB to enforce single session
-          const db = getDB();
-          const account = await db
-            .collection<Account>("accounts")
-            .findOne({ userId: decoded.userId });
-
-          if (!account || account.tokenVersion !== decoded.tokenVersion) {
-            return { user: null };
-          }
-
-          return { user: { userId: decoded.userId, email: decoded.email } };
-        } catch {
-          return { user: null };
-        }
+      if (!auth.startsWith("Bearer ")) {
+        return { user: null, authError: "No authentication token provided" };
       }
-      return { user: null };
+
+      const token = auth.slice(7);
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
+          userId: string;
+          email: string;
+          tokenVersion: number;
+        };
+
+        // Verify tokenVersion matches the DB to enforce single session
+        const db = getDB();
+        const account = await db
+          .collection<Account>("accounts")
+          .findOne({ userId: decoded.userId });
+
+        if (!account || account.tokenVersion !== decoded.tokenVersion) {
+          return { user: null, authError: "Session expired. Please login again" };
+        }
+
+        return { user: { userId: decoded.userId, email: decoded.email }, authError: null };
+      } catch (err) {
+        if (err instanceof jwt.TokenExpiredError) {
+          return { user: null, authError: "Authentication token has expired. Please login again" };
+        }
+        if (err instanceof jwt.JsonWebTokenError) {
+          return { user: null, authError: "Invalid authentication token" };
+        }
+        return { user: null, authError: "Authentication failed" };
+      }
     },
   });
 

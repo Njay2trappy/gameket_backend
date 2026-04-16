@@ -1,0 +1,199 @@
+{
+  "id": "giftCards",
+  "title": "Gift Cards",
+  "icon": "/images/grey-bank-card.png",
+  "categories": [
+    {
+      "slug": "airbnb",
+      "name": "Airbnb"
+    },
+    {
+      "slug": "amazon",
+      "name": "Amazon"
+    },
+    {
+      "slug": "apple",
+      "name": "Apple"
+    },
+    {
+      "slug": "best-buy",
+      "name": "Best Buy"
+    },
+    {
+      "slug": "binance",
+      "name": "Binance"
+    },
+    {
+      "slug": "counter-strike",
+      "name": "Counter Strike"
+    },
+    {
+      "slug": "cryptovoucher",
+      "name": "CryptoVoucher"
+    },
+    {
+      "slug": "dead-by-daylight",
+      "name": "Dead by Daylight"
+    },
+    {
+      "slug": "ebay",
+      "name": "Ebay"
+    },
+    {
+      "slug": "eneba",
+      "name": "Eneba"
+    },
+    {
+      "slug": "exapunks",
+      "name": "Exapunks"
+    },
+    {
+      "slug": "final-fantasy",
+      "name": "Final Fantasy"
+    },
+    {
+      "slug": "gamestop",
+      "name": "Gamestop"
+    },
+    {
+      "slug": "google-play",
+      "name": "Google Play"
+    },
+    {
+      "slug": "ikea",
+      "name": "Ikea"
+    },
+    {
+      "slug": "itunes",
+      "name": "iTunes"
+    },
+    {
+      "slug": "jagex-runescape",
+      "name": "Jagex Runescape"
+    },
+    {
+      "slug": "kigso-games",
+      "name": "Kigso Games"
+    },
+    {
+      "slug": "kingsisle",
+      "name": "KingsIsle"
+    },
+    {
+      "slug": "likee",
+      "name": "Likee"
+    },
+    {
+      "slug": "madden-nfl",
+      "name": "Madden NFL"
+    },
+    {
+      "slug": "microsoft",
+      "name": "Microsoft"
+    },
+    {
+      "slug": "mortal-kombat",
+      "name": "Mortal Kombat"
+    },
+    {
+      "slug": "nike",
+      "name": "Nike"
+    },
+    {
+      "slug": "noon",
+      "name": "Noon"
+    },
+    {
+      "slug": "nordstrom",
+      "name": "Nordstrom"
+    },
+    {
+      "slug": "obucks",
+      "name": "Obucks"
+    },
+    {
+      "slug": "offgamers",
+      "name": "Offgamers"
+    },
+    {
+      "slug": "opus-magnum",
+      "name": "Opus Magnum"
+    },
+    {
+      "slug": "others",
+      "name": "Others"
+    },
+    {
+      "slug": "perfect-world",
+      "name": "Perfect World"
+    },
+    {
+      "slug": "playstation",
+      "name": "Playstation Network (PSN)"
+    },
+    {
+      "slug": "razer-gold",
+      "name": "Razer Gold"
+    },
+    {
+      "slug": "roblox",
+      "name": "Roblox"
+    },
+    {
+      "slug": "rust",
+      "name": "Rust"
+    },
+    {
+      "slug": "sephora",
+      "name": "Sephora"
+    },
+    {
+      "slug": "starbucks",
+      "name": "Starbucks"
+    },
+    {
+      "slug": "steam-hkd-twd",
+      "name": "Steam (HKD & TWD)"
+    },
+    {
+      "slug": "steam-us",
+      "name": "Steam (US)"
+    },
+    {
+      "slug": "tango",
+      "name": "Tango"
+    },
+    {
+      "slug": "target",
+      "name": "Target"
+    },
+    {
+      "slug": "rainbow-six-siege",
+      "name": "Tom Clancy's Rainbow Six Siege"
+    },
+    {
+      "slug": "uber",
+      "name": "Uber"
+    },
+    {
+      "slug": "vanilla",
+      "name": "Vanilla"
+    },
+    {
+      "slug": "victorias-secret",
+      "name": "Victoria's Secret"
+    },
+    {
+      "slug": "walmart",
+      "name": "Walmart"
+    },
+    {
+      "slug": "xbox",
+      "name": "Xbox"
+    },
+    {
+      "slug": "zalando",
+      "name": "Zalando"
+    }
+  ]
+}
