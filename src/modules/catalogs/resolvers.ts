@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
 import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction } from "../../types.js";
 import type { Context } from "../../index.js";
-import countryData from "../../../data/country.json" with { type: "json" };
+import countryData from "../../../data/country.json";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
 const ALGORITHM = "aes-256-gcm";

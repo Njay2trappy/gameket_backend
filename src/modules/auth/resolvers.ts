@@ -130,6 +130,7 @@ export const authMutations = {
       storeId: uuidv4(),
       storeName: username,
       isActive: false,
+      isPromoted: false,
       type: "basic",
       totalSales: 0,
       positiveReviews: 0,
