@@ -2,8 +2,8 @@ import crypto from "crypto";
 import { allGroups } from "../../../data/categories/index.js";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
-import { getCatalogsDB, getDB } from "../../db.js";
-import type { Product, Store, User } from "../../types.js";
+import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
+import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction } from "../../types.js";
 import type { Context } from "../../index.js";
 import countryData from "../../../data/country.json" with { type: "json" };
 
@@ -105,6 +105,7 @@ export const catalogsQueries = {
         price: p.price,
         discount: p.discount,
         isActive: p.isActive,
+        isPromoted: p.isPromoted,
         available: p.available,
         sold: p.sold,
         createdAt: p.createdAt,
@@ -115,6 +116,7 @@ export const catalogsQueries = {
       code: 200,
       success: true,
       message: `${total} product(s) found`,
+      user,
       products: {
         edges,
         pageInfo: {
@@ -198,8 +200,215 @@ export const catalogsQueries = {
       code: 200,
       success: true,
       message: `${allAvailable.length} available, ${allSold.length} sold`,
+      user,
       availableCodes: paginateCodes(allAvailable),
       soldCodes: paginateCodes(allSold),
+    };
+  },
+
+  getUserAdvertisableProducts: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can view advertisable products", products: null };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 403, success: false, message: "You must have a store to view products", products: null };
+    }
+
+    if (!store.isActive) {
+      return { code: 403, success: false, message: "Your store is not active", products: null };
+    }
+
+    const allProducts = await catalogsDB
+      .collection<Product>("Products")
+      .find({ userId, isActive: true, isPromoted: false })
+      .toArray();
+    const total = allProducts.length;
+
+    let start = 0;
+    let end = total;
+
+    if (first != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + first, total);
+    } else if (first != null) {
+      end = Math.min(first, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allProducts.slice(start, end);
+
+    const edges = sliced.map((p, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        productId: p.productId,
+        catalog: p.catalog,
+        category: p.category,
+        region: p.region,
+        name: p.name,
+        description: p.description,
+        marketPrice: p.marketPrice,
+        price: p.price,
+        discount: p.discount,
+        isActive: p.isActive,
+        isPromoted: p.isPromoted,
+        available: p.available,
+        sold: p.sold,
+        createdAt: p.createdAt,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} advertisable product(s) found`,
+      user,
+      products: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  checkProductADPosition: async (
+    _: unknown,
+    { productId, amount }: { productId: string; amount: number },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can check ad positions", category: null, overallPosition: null, categoryPosition: null, totalPromoted: null, totalPromotedInCategory: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you", category: null, overallPosition: null, categoryPosition: null, totalPromoted: null, totalPromotedInCategory: null };
+    }
+
+    if (amount < 0.5) {
+      return { code: 400, success: false, message: "Minimum ad amount is 0.5", category: null, overallPosition: null, categoryPosition: null, totalPromoted: null, totalPromotedInCategory: null };
+    }
+
+    const allPromotions = await catalogsDB
+      .collection<PromotedProduct>("PromotedProducts")
+      .find()
+      .sort({ amount: -1, createdAt: 1 })
+      .toArray();
+
+    // Simulate overall position
+    const overallPosition = allPromotions.filter((p) => p.amount > amount).length + 1;
+    const totalPromoted = allPromotions.length + 1;
+
+    // Get product IDs for category filtering
+    const promotedProductIds = allPromotions.map((p) => p.productId);
+    const promotedProducts = promotedProductIds.length
+      ? await catalogsDB
+          .collection<Product>("Products")
+          .find({ productId: { $in: promotedProductIds }, category: product.category })
+          .toArray()
+      : [];
+
+    const categoryProductIds = new Set(promotedProducts.map((p) => p.productId));
+    const categoryPromotions = allPromotions.filter((p) => categoryProductIds.has(p.productId));
+
+    const categoryPosition = categoryPromotions.filter((p) => p.amount > amount).length + 1;
+    const totalPromotedInCategory = categoryPromotions.length + 1;
+
+    return {
+      code: 200,
+      success: true,
+      message: `With an amount of ${amount}, your product would be ranked #${overallPosition} overall and #${categoryPosition} in its category`,
+      user,
+      category: product.category,
+      overallPosition,
+      categoryPosition,
+      totalPromoted,
+      totalPromotedInCategory,
+    };
+  },
+
+  checkStoreADPosition: async (
+    _: unknown,
+    { amount }: { amount: number },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can check ad positions", overallPosition: null, totalPromoted: null };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", overallPosition: null, totalPromoted: null };
+    }
+
+    if (amount < 0.5) {
+      return { code: 400, success: false, message: "Minimum ad amount is 0.5", overallPosition: null, totalPromoted: null };
+    }
+
+    const allPromotions = await catalogsDB
+      .collection<PromotedStore>("PromotedStores")
+      .find()
+      .sort({ amount: -1, createdAt: 1 })
+      .toArray();
+
+    const overallPosition = allPromotions.filter((p) => p.amount > amount).length + 1;
+    const totalPromoted = allPromotions.length + 1;
+
+    return {
+      code: 200,
+      success: true,
+      message: `With an amount of ${amount}, your store would be ranked #${overallPosition} overall`,
+      user,
+      overallPosition,
+      totalPromoted,
     };
   },
 
@@ -414,6 +623,7 @@ export const catalogsMutations = {
       price: parseFloat(price.toFixed(2)),
       discount,
       isActive: false,
+      isPromoted: false,
       available: 0,
       sold: 0,
       availableCodes: [],
@@ -427,6 +637,7 @@ export const catalogsMutations = {
       code: 201,
       success: true,
       message: "Product added successfully",
+      user,
       product: {
         productId: product.productId,
         catalog: product.catalog,
@@ -438,6 +649,7 @@ export const catalogsMutations = {
         price: product.price,
         discount: product.discount,
         isActive: product.isActive,
+        isPromoted: product.isPromoted,
         available: product.available,
         sold: product.sold,
         createdAt: product.createdAt,
@@ -463,7 +675,10 @@ export const catalogsMutations = {
       return { code: 400, success: false, message: "Codes array cannot be empty", available: null };
     }
 
+    const db = getDB();
     const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
 
     // Verify product belongs to user
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
@@ -488,6 +703,7 @@ export const catalogsMutations = {
       code: 200,
       success: true,
       message: `${encryptedCodes.length} code(s) added successfully`,
+      user,
       available: product.available + encryptedCodes.length,
     };
   },
@@ -510,7 +726,10 @@ export const catalogsMutations = {
       return { code: 400, success: false, message: "Codes array cannot be empty", available: null };
     }
 
+    const db = getDB();
     const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
 
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
     if (!product) {
@@ -553,6 +772,7 @@ export const catalogsMutations = {
       code: 200,
       success: true,
       message: `${toRemove.length} code(s) deleted successfully`,
+      user,
       available: newAvailable,
     };
   },
@@ -634,6 +854,7 @@ export const catalogsMutations = {
       code: 200,
       success: true,
       message: "Product updated successfully",
+      user,
       product: {
         productId: updated!.productId,
         catalog: updated!.catalog,
@@ -645,6 +866,7 @@ export const catalogsMutations = {
         price: updated!.price,
         discount: updated!.discount,
         isActive: updated!.isActive,
+        isPromoted: updated!.isPromoted,
         available: updated!.available,
         sold: updated!.sold,
         createdAt: updated!.createdAt,
@@ -683,6 +905,252 @@ export const catalogsMutations = {
       code: 200,
       success: true,
       message: "Product deleted successfully",
+      user,
+    };
+  },
+
+  advertiseProduct: async (
+    _: unknown,
+    { input }: { input: { productId: string; amount: number; campaignStart: string; campaignEnd: string } },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const { productId, amount } = input;
+    const start = new Date(input.campaignStart);
+    const end = new Date(input.campaignEnd);
+
+    if (amount < 0.5) {
+      return { code: 400, success: false, message: "Minimum ad amount is 0.5", promotion: null };
+    }
+
+    if (end <= start) {
+      return { code: 400, success: false, message: "Campaign end must be after campaign start", promotion: null };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+    const walletsDB = getWalletsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can advertise products", promotion: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you", promotion: null };
+    }
+
+    if (!product.isActive) {
+      return { code: 400, success: false, message: "Product must be active to advertise", promotion: null };
+    }
+
+    // Check balance
+    const balance = await walletsDB.collection<Balance>("Balances").findOne({ userId });
+    if (!balance || balance.availableBalance < amount) {
+      return { code: 400, success: false, message: "Insufficient balance", promotion: null };
+    }
+
+    // Check if product already has a promotion
+    const existingPromotion = await catalogsDB
+      .collection<PromotedProduct>("PromotedProducts")
+      .findOne({ productId });
+
+    if (existingPromotion) {
+      return { code: 409, success: false, message: "Product is already promoted. Wait for the current campaign to end before creating a new one", promotion: null };
+    }
+
+    // Deduct from wallet
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId },
+      { $inc: { availableBalance: -amount } }
+    );
+
+    // Record transaction
+    const transaction: Transaction = {
+      userId,
+      id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
+      type: "Product promotion",
+      status: "completed",
+      method: "balance",
+      amount: parseFloat(amount.toFixed(2)),
+      createdAt: new Date().toISOString(),
+    };
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne(transaction);
+
+    // Create new promotion
+    const promotion: PromotedProduct = {
+      userId,
+      storeId: product.storeId,
+      productId,
+      amount: parseFloat(amount.toFixed(2)),
+      campaignStart: start.toISOString(),
+      campaignEnd: end.toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    await catalogsDB.collection<PromotedProduct>("PromotedProducts").insertOne(promotion);
+
+    // Set isPromoted on the product
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      { $set: { isPromoted: true } }
+    );
+
+    return {
+      code: 201,
+      success: true,
+      message: "Product promoted successfully",
+      user,
+      promotion: {
+        productId: promotion.productId,
+        amount: promotion.amount,
+        campaignStart: promotion.campaignStart,
+        campaignEnd: promotion.campaignEnd,
+        createdAt: promotion.createdAt,
+        product: {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: true,
+          available: product.available,
+          sold: product.sold,
+          createdAt: product.createdAt,
+        },
+      },
+    };
+  },
+
+  advertiseStore: async (
+    _: unknown,
+    { input }: { input: { amount: number; campaignStart: string; campaignEnd: string } },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const { amount } = input;
+    const start = new Date(input.campaignStart);
+    const end = new Date(input.campaignEnd);
+
+    if (amount < 0.5) {
+      return { code: 400, success: false, message: "Minimum ad amount is 0.5", promotion: null };
+    }
+
+    if (end <= start) {
+      return { code: 400, success: false, message: "Campaign end must be after campaign start", promotion: null };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+    const walletsDB = getWalletsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can advertise stores", promotion: null };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", promotion: null };
+    }
+
+    if (!store.isActive) {
+      return { code: 400, success: false, message: "Store must be active to advertise", promotion: null };
+    }
+
+    // Check balance
+    const balance = await walletsDB.collection<Balance>("Balances").findOne({ userId });
+    if (!balance || balance.availableBalance < amount) {
+      return { code: 400, success: false, message: "Insufficient balance", promotion: null };
+    }
+
+    // Check if store already has a promotion
+    const existingPromotion = await catalogsDB
+      .collection<PromotedStore>("PromotedStores")
+      .findOne({ storeId: store.storeId });
+
+    if (existingPromotion) {
+      return { code: 409, success: false, message: "Store is already promoted. Wait for the current campaign to end before creating a new one", promotion: null };
+    }
+
+    // Deduct from wallet
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId },
+      { $inc: { availableBalance: -amount } }
+    );
+
+    // Record transaction
+    const transaction: Transaction = {
+      userId,
+      id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
+      type: "Store promotion",
+      status: "completed",
+      method: "balance",
+      amount: parseFloat(amount.toFixed(2)),
+      createdAt: new Date().toISOString(),
+    };
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne(transaction);
+
+    // Create new promotion
+    const promotion: PromotedStore = {
+      userId,
+      storeId: store.storeId,
+      amount: parseFloat(amount.toFixed(2)),
+      campaignStart: start.toISOString(),
+      campaignEnd: end.toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    await catalogsDB.collection<PromotedStore>("PromotedStores").insertOne(promotion);
+
+    // Set isPromoted on the store
+    await catalogsDB.collection<Store>("Stores").updateOne(
+      { storeId: store.storeId, userId },
+      { $set: { isPromoted: true } }
+    );
+
+    return {
+      code: 201,
+      success: true,
+      message: "Store promoted successfully",
+      user,
+      promotion: {
+        storeId: promotion.storeId,
+        amount: promotion.amount,
+        campaignStart: promotion.campaignStart,
+        campaignEnd: promotion.campaignEnd,
+        createdAt: promotion.createdAt,
+        store: {
+          storeId: store.storeId,
+          storeName: store.storeName,
+          isActive: store.isActive,
+          isPromoted: true,
+          type: store.type,
+          totalSales: store.totalSales,
+          positiveReviews: store.positiveReviews,
+          negativeReviews: store.negativeReviews,
+        },
+      },
     };
   },
 };

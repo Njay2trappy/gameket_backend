@@ -26,6 +26,7 @@ export const walletsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     deposit: DepositDetails
     paymentData: String
   }
@@ -34,6 +35,7 @@ export const walletsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     wallet: Wallet
   }
 
@@ -49,6 +51,7 @@ export const walletsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     method: PaymentMethod
   }
 

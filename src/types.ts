@@ -83,10 +83,21 @@ export interface Product {
   price: number;
   discount: number;
   isActive: boolean;
+  isPromoted: boolean;
   available: number;
   sold: number;
   availableCodes: string[];
   soldCodes: string[];
+  createdAt: string;
+}
+
+export interface PromotedProduct {
+  userId: string;
+  storeId: string;
+  productId: string;
+  amount: number;
+  campaignStart: string;
+  campaignEnd: string;
   createdAt: string;
 }
 
@@ -95,9 +106,19 @@ export interface Store {
   storeId: string;
   storeName: string;
   isActive: boolean;
+  isPromoted: boolean;
   type: string;
   totalSales: number;
   positiveReviews: number;
   negativeReviews: number;
   reviews: Review[];
+}
+
+export interface PromotedStore {
+  userId: string;
+  storeId: string;
+  amount: number;
+  campaignStart: string;
+  campaignEnd: string;
+  createdAt: string;
 }

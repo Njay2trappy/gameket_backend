@@ -55,6 +55,7 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     products: ProductConnection
   }
 
@@ -81,14 +82,38 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     availableCodes: CodeConnection
     soldCodes: CodeConnection
+  }
+
+  type GetUserAdvertisableProductsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    products: ProductConnection
+  }
+
+  type CheckProductADPositionResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    category: String
+    overallPosition: Int
+    categoryPosition: Int
+    totalPromoted: Int
+    totalPromotedInCategory: Int
   }
 
   extend type Query {
     fetchCatalog(name: String!, category: String, first: Int, after: String, last: Int, before: String): FetchCatalogResponse!
     getUserProducts(first: Int, after: String, last: Int, before: String): GetUserProductsResponse!
+    getUserAdvertisableProducts(first: Int, after: String, last: Int, before: String): GetUserAdvertisableProductsResponse!
     viewProductCodes(productId: ID!, first: Int, after: String, last: Int, before: String): ViewProductCodesResponse!
+    checkProductADPosition(productId: ID!, amount: Float!): CheckProductADPositionResponse!
+    checkStoreADPosition(amount: Float!): CheckStoreADPositionResponse!
   }
 
   type ProductDetails {
@@ -102,6 +127,7 @@ export const catalogsTypeDefs = `#graphql
     price: Float!
     discount: Float!
     isActive: Boolean!
+    isPromoted: Boolean!
     available: Int!
     sold: Int!
     createdAt: String!
@@ -121,6 +147,7 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     product: ProductDetails
   }
 
@@ -133,6 +160,7 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     available: Int
   }
 
@@ -145,6 +173,7 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     available: Int
   }
 
@@ -159,6 +188,7 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     product: ProductDetails
   }
 
@@ -166,6 +196,63 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
+  }
+
+  input AdvertiseProductInput {
+    productId: ID!
+    amount: Float!
+    campaignStart: Date!
+    campaignEnd: Date!
+  }
+
+  type PromotedProductDetails {
+    productId: ID!
+    amount: Float!
+    campaignStart: Date!
+    campaignEnd: Date!
+    createdAt: String!
+    product: ProductDetails!
+  }
+
+  type AdvertiseProductResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    promotion: PromotedProductDetails
+  }
+
+  type CheckStoreADPositionResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    overallPosition: Int
+    totalPromoted: Int
+  }
+
+  input AdvertiseStoreInput {
+    amount: Float!
+    campaignStart: Date!
+    campaignEnd: Date!
+  }
+
+  type PromotedStoreDetails {
+    storeId: ID!
+    amount: Float!
+    campaignStart: Date!
+    campaignEnd: Date!
+    createdAt: String!
+    store: StoreDetails!
+  }
+
+  type AdvertiseStoreResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    promotion: PromotedStoreDetails
   }
 
   extend type Mutation {
@@ -174,5 +261,7 @@ export const catalogsTypeDefs = `#graphql
     deleteProduct(productId: ID!): DeleteProductResponse!
     addProductCodes(input: AddProductCodesInput!): AddProductCodesResponse!
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
+    advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!
+    advertiseStore(input: AdvertiseStoreInput!): AdvertiseStoreResponse!
   }
 `;

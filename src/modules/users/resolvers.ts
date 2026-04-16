@@ -5,6 +5,70 @@ import { getDB, getCatalogsDB, getWalletsDB } from "../../db.js";
 import type { User, Account, Store, Balance, Premium, Transaction, Product } from "../../types.js";
 import type { Context } from "../../index.js";
 
+export const userFieldResolvers = {
+  twoFactorAuth: async (parent: Record<string, unknown>) => {
+    if ("twoFactorAuth" in parent) return parent.twoFactorAuth;
+    const db = getDB();
+    const account = await db.collection<Account>("accounts").findOne({ userId: parent.id as string });
+    return account?.twoFactorAuth ?? false;
+  },
+  store: async (parent: Record<string, unknown>) => {
+    const catalogsDB = getCatalogsDB();
+    const storeDoc = await catalogsDB.collection<Store>("Stores").findOne({ userId: parent.id as string });
+    if (!storeDoc) return null;
+    return {
+      storeId: storeDoc.storeId,
+      storeName: storeDoc.storeName,
+      isActive: storeDoc.isActive,
+      type: storeDoc.type,
+      totalSales: storeDoc.totalSales,
+      positiveReviews: storeDoc.positiveReviews,
+      negativeReviews: storeDoc.negativeReviews,
+    };
+  },
+  wallet: async (parent: Record<string, unknown>) => {
+    const walletsDB = getWalletsDB();
+    const balanceDoc = await walletsDB.collection<Balance>("Balances").findOne({ userId: parent.id as string });
+    if (!balanceDoc) return null;
+    return {
+      availableBalance: parseFloat(balanceDoc.availableBalance.toFixed(2)),
+      suspendedBalance: parseFloat(balanceDoc.suspendedBalance.toFixed(2)),
+      methods: balanceDoc.methods,
+    };
+  },
+  premium: async (parent: Record<string, unknown>) => {
+    const db = getDB();
+    const premiumDoc = await db.collection<Premium>("Premium").findOne({ userId: parent.id as string, isActive: true });
+    if (!premiumDoc) return null;
+    return {
+      subscribedAt: premiumDoc.subscribedAt,
+      expiresAt: premiumDoc.expiresAt,
+      isActive: premiumDoc.isActive,
+    };
+  },
+  products: async (parent: Record<string, unknown>) => {
+    const catalogsDB = getCatalogsDB();
+    const productDocs = await catalogsDB.collection<Product>("Products").find({ userId: parent.id as string }).toArray();
+    if (!productDocs.length) return null;
+    return productDocs.map((p) => ({
+      productId: p.productId,
+      catalog: p.catalog,
+      category: p.category,
+      region: p.region,
+      name: p.name,
+      description: p.description,
+      marketPrice: p.marketPrice,
+      price: p.price,
+      discount: p.discount,
+      isActive: p.isActive,
+      isPromoted: p.isPromoted,
+      available: p.available,
+      sold: p.sold,
+      createdAt: p.createdAt,
+    }));
+  },
+};
+
 export const usersQueries = {
   getUserDetails: async (_: unknown, __: unknown, context: Context) => {
     if (!context.user) {
@@ -14,10 +78,7 @@ export const usersQueries = {
     }
 
     const { userId } = context.user;
-
     const db = getDB();
-    const catalogsDB = getCatalogsDB();
-    const walletsDB = getWalletsDB();
 
     const user = await db.collection<User>("users").findOne({ id: userId });
 
@@ -26,97 +87,14 @@ export const usersQueries = {
         code: 404,
         success: false,
         message: "User not found",
-        user: null,
       };
     }
-
-    const account = await db.collection<Account>("accounts").findOne({ userId });
-
-    const storeDoc = await catalogsDB
-      .collection<Store>("Stores")
-      .findOne({ userId });
-
-    const store = storeDoc
-      ? {
-          storeId: storeDoc.storeId,
-          storeName: storeDoc.storeName,
-          isActive: storeDoc.isActive,
-          type: storeDoc.type,
-          totalSales: storeDoc.totalSales,
-          positiveReviews: storeDoc.positiveReviews,
-          negativeReviews: storeDoc.negativeReviews,
-        }
-      : null;
-
-    const balanceDoc = await walletsDB
-      .collection<Balance>("Balances")
-      .findOne({ userId });
-
-    const wallet = balanceDoc
-      ? {
-          availableBalance: parseFloat(balanceDoc.availableBalance.toFixed(2)),
-          suspendedBalance: parseFloat(balanceDoc.suspendedBalance.toFixed(2)),
-          methods: balanceDoc.methods,
-        }
-      : null;
-
-    const premiumDoc = await db.collection<Premium>("Premium").findOne(
-      { userId, isActive: true }
-    );
-
-    const premium = premiumDoc
-      ? {
-          subscribedAt: premiumDoc.subscribedAt,
-          expiresAt: premiumDoc.expiresAt,
-          isActive: premiumDoc.isActive,
-        }
-      : null;
-
-    const productDocs = await catalogsDB
-      .collection<Product>("Products")
-      .find({ userId })
-      .toArray();
-
-    const products = productDocs.length
-      ? productDocs.map((p) => ({
-          productId: p.productId,
-          catalog: p.catalog,
-          category: p.category,
-          region: p.region,
-          name: p.name,
-          description: p.description,
-          marketPrice: p.marketPrice,
-          price: p.price,
-          discount: p.discount,
-          isActive: p.isActive,
-          available: p.available,
-          sold: p.sold,
-          createdAt: p.createdAt,
-        }))
-      : null;
 
     return {
       code: 200,
       success: true,
       message: "User details retrieved successfully",
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        country: user.country,
-        isActive: user.isActive,
-        isVerified: user.isVerified,
-        isPremium: user.isPremium,
-        twoFactorAuth: account?.twoFactorAuth ?? false,
-        rank: user.rank,
-        registered: user.registered,
-        isStore: user.isStore,
-        avatar: user.avatar,
-      },
-      store,
-      wallet,
-      premium,
-      products,
+      user,
     };
   },
 
@@ -128,7 +106,10 @@ export const usersQueries = {
     }
 
     const { userId } = context.user;
+    const db = getDB();
     const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
 
     const storeDoc = await catalogsDB
       .collection<Store>("Stores")
@@ -142,6 +123,7 @@ export const usersQueries = {
       code: 200,
       success: true,
       message: "Store details retrieved successfully",
+      user,
       store: {
         storeId: storeDoc.storeId,
         storeName: storeDoc.storeName,
@@ -164,6 +146,8 @@ export const usersQueries = {
     const { userId } = context.user;
     const db = getDB();
 
+    const user = await db.collection<User>("users").findOne({ id: userId });
+
     const premiumDoc = await db.collection<Premium>("Premium").findOne(
       { userId, isActive: true }
     );
@@ -176,6 +160,7 @@ export const usersQueries = {
       code: 200,
       success: true,
       message: "Premium details retrieved successfully",
+      user,
       premium: {
         subscribedAt: premiumDoc.subscribedAt,
         expiresAt: premiumDoc.expiresAt,
@@ -273,6 +258,7 @@ export const usersMutations = {
       message: existingPremium
         ? "Premium subscription extended by 30 days"
         : "Premium subscription activated for 30 days",
+      user: { ...user, isPremium: true },
       premium: {
         subscribedAt: existingPremium?.subscribedAt ?? now.toISOString(),
         expiresAt: expiresAt.toISOString(),

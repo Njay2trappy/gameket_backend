@@ -14,7 +14,10 @@ export const walletsQueries = {
     }
 
     const { userId } = context.user;
+    const db = getDB();
     const walletsDB = getWalletsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
 
     const balance = await walletsDB
       .collection<Balance>("Balances")
@@ -28,6 +31,7 @@ export const walletsQueries = {
       code: 200,
       success: true,
       message: "Wallet details retrieved successfully",
+      user,
       wallet: {
         availableBalance: parseFloat(balance.availableBalance.toFixed(2)),
         suspendedBalance: parseFloat(balance.suspendedBalance.toFixed(2)),
@@ -129,6 +133,7 @@ export const walletsMutations = {
       code: 200,
       success: true,
       message: "Deposit initiated successfully",
+      user,
       deposit: {
         amount,
         fee,
@@ -162,7 +167,9 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Value must be at most 200 characters", method: null };
     }
 
+    const db = getDB();
     const walletsDB = getWalletsDB();
+    const user = await db.collection<User>("users").findOne({ id: userId });
     const balances = walletsDB.collection<Balance>("Balances");
 
     const balance = await balances.findOne({ userId });
@@ -178,7 +185,7 @@ export const walletsMutations = {
         { userId },
         { $set: { "methods.0": method } }
       );
-      return { code: 200, success: true, message: "Payment method updated successfully", method };
+      return { code: 200, success: true, message: "Payment method updated successfully", user, method };
     }
 
     await balances.updateOne(
@@ -186,6 +193,6 @@ export const walletsMutations = {
       { $push: { methods: method } }
     );
 
-    return { code: 201, success: true, message: "Payment method added successfully", method };
+    return { code: 201, success: true, message: "Payment method added successfully", user, method };
   },
 };

@@ -35,12 +35,14 @@ export const authTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
   }
 
   type UpdateTwoFactorAuthResponse {
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     twoFactorAuth: Boolean
   }
 

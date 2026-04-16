@@ -3,42 +3,25 @@ export const usersTypeDefs = `#graphql
     storeId: ID!
     storeName: String!
     isActive: Boolean!
+    isPromoted: Boolean!
     type: String!
     totalSales: Int!
     positiveReviews: Int!
     negativeReviews: Int!
   }
 
-  type UserDetails {
-    id: ID!
-    username: String!
-    email: String!
-    country: String!
-    isActive: Boolean!
-    isVerified: Boolean!
-    isPremium: Boolean!
-    twoFactorAuth: Boolean!
-    rank: Int!
-    registered: String!
-    isStore: Boolean!
-    avatar: String
-  }
-
   type UserDetailsResponse {
     code: Int!
     success: Boolean!
     message: String!
-    user: UserDetails
-    store: StoreDetails
-    wallet: Wallet
-    premium: PremiumDetails
-    products: [ProductDetails!]
+    user: User
   }
 
   type GetStoreDetailsResponse {
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     store: StoreDetails
   }
 
@@ -52,6 +35,7 @@ export const usersTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    user: User
     premium: PremiumDetails
   }
 

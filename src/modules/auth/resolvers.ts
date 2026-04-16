@@ -210,7 +210,9 @@ export const authMutations = {
 
     const db = getDB();
     const accounts = db.collection<Account>("accounts");
+    const users = db.collection<User>("users");
 
+    const user = await users.findOne({ id: userId });
     const account = await accounts.findOne({ userId });
     if (!account) {
       return { code: 404, success: false, message: "Account not found" };
@@ -249,7 +251,7 @@ export const authMutations = {
       { $set: { password: hashedPassword, tokenVersion: newTokenVersion } }
     );
 
-    return { code: 200, success: true, message: "Password updated successfully. Please log in again." };
+    return { code: 200, success: true, message: "Password updated successfully. Please log in again.", user };
   },
 
   updateTwoFactorAuth: async (
@@ -267,7 +269,9 @@ export const authMutations = {
 
     const db = getDB();
     const accounts = db.collection<Account>("accounts");
+    const users = db.collection<User>("users");
 
+    const user = await users.findOne({ id: userId });
     const account = await accounts.findOne({ userId });
     if (!account) {
       return { code: 404, success: false, message: "Account not found", twoFactorAuth: null };
@@ -284,7 +288,7 @@ export const authMutations = {
       ? "Two-factor authentication enabled"
       : "Two-factor authentication disabled";
 
-    return { code: 200, success: true, message, twoFactorAuth: newValue };
+    return { code: 200, success: true, message, user, twoFactorAuth: newValue };
   },
 
   sendVerification: async (

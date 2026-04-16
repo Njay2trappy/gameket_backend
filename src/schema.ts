@@ -4,6 +4,8 @@ import { walletsTypeDefs } from "./modules/wallets/schema.js";
 import { catalogsTypeDefs } from "./modules/catalogs/schema.js";
 
 const baseTypeDefs = `#graphql
+  scalar Date
+
   type User {
     id: ID!
     username: String!
@@ -17,6 +19,10 @@ const baseTypeDefs = `#graphql
     registered: String!
     isStore: Boolean!
     avatar: String
+    store: StoreDetails
+    wallet: Wallet
+    premium: PremiumDetails
+    products: [ProductDetails!]
   }
 
   type Query {
