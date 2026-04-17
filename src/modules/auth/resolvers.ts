@@ -151,7 +151,16 @@ export const authMutations = {
 
     await stores.insertOne(store);
 
-    return { code: 201, success: true, message: "Registration successful", user: { ...user, twoFactorAuth: false } };
+    // Generate OTP for email verification
+    const otp = String(randomInt(100000, 999999));
+    const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    await accounts.updateOne(
+      { userId },
+      { $set: { otp, otpExpiresAt } }
+    );
+
+    return { code: 201, success: true, message: "Registration successful. A verification code has been sent to your email.", user: { ...user, twoFactorAuth: false } };
   },
 
   login: async (
