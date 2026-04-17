@@ -25,6 +25,12 @@ export async function connectDB(): Promise<Db> {
     { $set: { createdAt: new Date().toISOString() } }
   );
 
+  // Backfill authProvider for existing accounts that don't have it
+  await db.collection("accounts").updateMany(
+    { authProvider: { $exists: false } },
+    { $set: { authProvider: "email" } }
+  );
+
   return db;
 }
 

@@ -2,10 +2,13 @@ import { v4 as uuidv4 } from "uuid";
 import { randomInt } from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { OAuth2Client } from "google-auth-library";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import type { User, Account, Balance, Store } from "../../types.js";
 import type { Context } from "../../index.js";
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 export const authQueries = {};
 
@@ -104,6 +107,7 @@ export const authMutations = {
       userId,
       email,
       password: hashedPassword,
+      authProvider: "email",
       twoFactorAuth: false,
       lastLogin: null,
       tokenVersion: 0,
@@ -166,7 +170,7 @@ export const authMutations = {
       return { code: 401, success: false, message: "Invalid email or password", token: null, user: null };
     }
 
-    const valid = await bcrypt.compare(password, account.password);
+    const valid = await bcrypt.compare(password, account.password || "");
     if (!valid) {
       return { code: 401, success: false, message: "Invalid email or password", token: null, user: null };
     }
@@ -202,6 +206,167 @@ export const authMutations = {
     return { code: 200, success: true, message: "Login successful", token, user: { ...user, twoFactorAuth: account.twoFactorAuth } };
   },
 
+  googleSignIn: async (
+    _: unknown,
+    { input }: { input: { idToken: string; username?: string; country?: string } }
+  ) => {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: input.idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    }).catch(() => null);
+
+    if (!ticket) {
+      return { code: 401, success: false, message: "Invalid Google token", token: null, user: null };
+    }
+
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      return { code: 401, success: false, message: "Invalid Google token", token: null, user: null };
+    }
+
+    const email = payload.email.toLowerCase();
+
+    const db = getDB();
+    const accounts = db.collection<Account>("accounts");
+    const users = db.collection<User>("users");
+
+    // Check if user already exists
+    const existingAccount = await accounts.findOne({ email });
+    if (existingAccount) {
+      const user = await users.findOne({ id: existingAccount.userId });
+      if (!user) {
+        return { code: 401, success: false, message: "Account not found", token: null, user: null };
+      }
+
+      if (!user.isActive) {
+        return { code: 403, success: false, message: "Account is deactivated", token: null, user: null };
+      }
+
+      const newTokenVersion = (existingAccount.tokenVersion ?? 0) + 1;
+
+      await accounts.updateOne(
+        { userId: existingAccount.userId },
+        { $set: { lastLogin: new Date().toISOString(), tokenVersion: newTokenVersion } }
+      );
+
+      const secret = process.env.JWT_SECRET;
+      if (!secret) {
+        throw new Error("Server configuration error");
+      }
+
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, tokenVersion: newTokenVersion },
+        secret,
+        { expiresIn: "1h" }
+      );
+
+      return { code: 200, success: true, message: "Login successful", token, user: { ...user, twoFactorAuth: existingAccount.twoFactorAuth } };
+    }
+
+    // New user — username & country required
+    const username = input.username?.trim();
+    const country = input.country?.trim();
+
+    if (!username) {
+      return { code: 400, success: false, message: "Username is required for new accounts", token: null, user: null };
+    }
+    if (!country) {
+      return { code: 400, success: false, message: "Country is required for new accounts", token: null, user: null };
+    }
+
+    // Validate username
+    if (username.length > 15) {
+      return { code: 400, success: false, message: "Username must be at most 15 characters", token: null, user: null };
+    }
+    if (/\s/.test(username)) {
+      return { code: 400, success: false, message: "Username must not contain spaces", token: null, user: null };
+    }
+
+    const normalized = username.toLowerCase().replace(/[^a-z]/g, "");
+    if (normalized.includes("gameket") || normalized.includes("gamket") || normalized.includes("gamekets") || normalized.includes("gam3ket") || normalized.includes("gamek3t")) {
+      return { code: 400, success: false, message: "This username is not allowed", token: null, user: null };
+    }
+
+    if (country.length > 100) {
+      return { code: 400, success: false, message: "Country name is too long", token: null, user: null };
+    }
+
+    // Check username uniqueness
+    if (await users.findOne({ username: { $regex: `^${username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" } })) {
+      return { code: 400, success: false, message: "Username is already taken", token: null, user: null };
+    }
+
+    const userId = uuidv4();
+    const registered = new Date().toISOString();
+
+    const user: User = {
+      id: userId,
+      username,
+      email,
+      country,
+      isActive: true,
+      isVerified: true,
+      isPremium: false,
+      rank: 1,
+      registered,
+      isStore: false,
+      avatar: payload.picture || null,
+    };
+
+    const account: Account = {
+      userId,
+      email,
+      password: null,
+      authProvider: "google",
+      twoFactorAuth: false,
+      lastLogin: registered,
+      tokenVersion: 1,
+      otp: null,
+      otpExpiresAt: null,
+    };
+
+    await users.insertOne(user);
+    await accounts.insertOne(account);
+
+    // Create wallet balance
+    const walletsDb = getWalletsDB();
+    await walletsDb.collection<Balance>("Balances").insertOne({
+      userId,
+      availableBalance: 0,
+      suspendedBalance: 0,
+      methods: [],
+    });
+
+    // Create store
+    const catalogsDb = getCatalogsDB();
+    await catalogsDb.collection<Store>("Stores").insertOne({
+      userId,
+      storeId: uuidv4(),
+      storeName: username,
+      isActive: false,
+      isPromoted: false,
+      type: "basic",
+      totalSales: 0,
+      positiveReviews: 0,
+      negativeReviews: 0,
+      reviews: [],
+      createdAt: registered,
+    });
+
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      throw new Error("Server configuration error");
+    }
+
+    const token = jwt.sign(
+      { userId, email, tokenVersion: 1 },
+      secret,
+      { expiresIn: "1h" }
+    );
+
+    return { code: 201, success: true, message: "Registration successful", token, user: { ...user, twoFactorAuth: false } };
+  },
+
   updatePassword: async (
     _: unknown,
     { input }: { input: { oldPassword: string; newPassword: string } },
@@ -226,8 +391,12 @@ export const authMutations = {
       return { code: 404, success: false, message: "Account not found" };
     }
 
+    if (account.authProvider === "google") {
+      return { code: 400, success: false, message: "Cannot update password for Google accounts" };
+    }
+
     // Verify old password matches current password
-    const valid = await bcrypt.compare(oldPassword, account.password);
+    const valid = await bcrypt.compare(oldPassword, account.password || "");
     if (!valid) {
       return { code: 401, success: false, message: "Current password is incorrect" };
     }

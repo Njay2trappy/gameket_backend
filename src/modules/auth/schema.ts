@@ -67,9 +67,16 @@ export const authTypeDefs = `#graphql
     message: String!
   }
 
+  input GoogleSignInInput {
+    idToken: String!
+    username: String
+    country: String
+  }
+
   extend type Mutation {
     register(input: RegisterInput!): RegisterResponse!
     login(input: LoginInput!): LoginResponse!
+    googleSignIn(input: GoogleSignInInput!): LoginResponse!
     updatePassword(input: UpdatePasswordInput!): UpdatePasswordResponse!
     updateTwoFactorAuth: UpdateTwoFactorAuthResponse!
     sendVerification(input: SendVerificationInput!): SendVerificationResponse!

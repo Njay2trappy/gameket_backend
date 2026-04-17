@@ -15,7 +15,8 @@ export interface User {
 export interface Account {
   userId: string;
   email: string;
-  password: string;
+  password: string | null;
+  authProvider: "email" | "google";
   twoFactorAuth: boolean;
   lastLogin: string | null;
   tokenVersion: number;
