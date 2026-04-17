@@ -192,6 +192,23 @@ export const catalogsTypeDefs = `#graphql
     products: ProductConnection
   }
 
+  type StoreEdge {
+    cursor: String!
+    node: StoreDetails!
+  }
+
+  type StoreConnection {
+    edges: [StoreEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type GetStoresResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    stores: StoreConnection
+  }
+
   extend type Query {
     fetchCatalog(name: String!, category: String, first: Int, after: String, last: Int, before: String): FetchCatalogResponse!
     getUserProducts(productId: ID, first: Int, after: String, last: Int, before: String): GetUserProductsResponse!
@@ -204,6 +221,7 @@ export const catalogsTypeDefs = `#graphql
     getProducts(category: String!, region: String, min: Float, max: Float, sort: ProductSort, first: Int, after: String, last: Int, before: String): GetProductsResponse!
     getProductDetails(productId: ID!): GetProductDetailsResponse!
     getStoreDetails(storeId: ID!, first: Int, after: String, last: Int, before: String): GetStoreDetailsPublicResponse!
+    getStores(first: Int, after: String, last: Int, before: String): GetStoresResponse!
   }
 
   enum ProductSort {

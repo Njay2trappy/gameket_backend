@@ -1047,6 +1047,70 @@ export const catalogsQueries = {
       },
     };
   },
+
+  getStores: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string }
+  ) => {
+    const catalogsDB = getCatalogsDB();
+
+    const allStores = await catalogsDB
+      .collection<Store>("Stores")
+      .find({ isActive: true })
+      .sort({ totalSales: -1 })
+      .toArray();
+
+    const total = allStores.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allStores.slice(start, end);
+
+    const edges = sliced.map((s, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        storeId: s.storeId,
+        storeName: s.storeName,
+        isActive: s.isActive,
+        isPromoted: s.isPromoted,
+        type: s.type,
+        totalSales: s.totalSales,
+        positiveReviews: s.positiveReviews,
+        negativeReviews: s.negativeReviews,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} store(s) found`,
+      stores: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
 };
 
 export const catalogsMutations = {
