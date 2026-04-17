@@ -26,6 +26,7 @@ export const walletsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
+    id: String
     user: User
     deposit: DepositDetails
     payId: String

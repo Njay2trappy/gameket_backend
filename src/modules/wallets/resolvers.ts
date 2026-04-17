@@ -257,6 +257,7 @@ export const walletsMutations = {
       code: 200,
       success: true,
       message: "Deposit initiated successfully",
+      id: transactionId,
       user,
       deposit: {
         amount,
