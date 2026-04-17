@@ -260,6 +260,13 @@ export const usersMutations = {
         { id: userId },
         { $set: { isPremium: true } }
       );
+
+      // Update store type to premium
+      const catalogsDB = getCatalogsDB();
+      await catalogsDB.collection<Store>("Stores").updateOne(
+        { userId },
+        { $set: { type: "premium" } }
+      );
     }
 
     await walletsDB.collection<Balance>("Balances").updateOne(
