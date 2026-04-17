@@ -31,6 +31,52 @@ export async function connectDB(): Promise<Db> {
     { $set: { authProvider: "email" } }
   );
 
+  // Backfill type for existing products that don't have it
+  await catalogsDb.collection("Products").updateMany(
+    { type: { $exists: false } },
+    { $set: { type: "Auto" } }
+  );
+
+  // Backfill isApproved: convert string values back to boolean
+  await catalogsDb.collection("Stores").updateMany(
+    { isApproved: "approved" },
+    { $set: { isApproved: true, approveStatus: "success" } }
+  );
+  await catalogsDb.collection("Stores").updateMany(
+    { isApproved: "pending" },
+    { $set: { isApproved: false, approveStatus: "pending" } }
+  );
+  await catalogsDb.collection("Stores").updateMany(
+    { isApproved: "rejected" },
+    { $set: { isApproved: false, approveStatus: "failed" } }
+  );
+  await catalogsDb.collection("Stores").updateMany(
+    { isApproved: "false" },
+    { $set: { isApproved: false, approveStatus: null } }
+  );
+  await catalogsDb.collection("Stores").updateMany(
+    { isApproved: { $exists: false } },
+    { $set: { isApproved: false, approveStatus: null } }
+  );
+
+  // Backfill approveStatus for stores that don't have it
+  await catalogsDb.collection("Stores").updateMany(
+    { approveStatus: { $exists: false } },
+    { $set: { approveStatus: null } }
+  );
+
+  // Backfill isActive: set true for all existing stores
+  await catalogsDb.collection("Stores").updateMany(
+    { isActive: false },
+    { $set: { isActive: true } }
+  );
+
+  // Backfill requestCount for existing stores
+  await catalogsDb.collection("Stores").updateMany(
+    { requestCount: { $exists: false } },
+    { $set: { requestCount: 0 } }
+  );
+
   return db;
 }
 

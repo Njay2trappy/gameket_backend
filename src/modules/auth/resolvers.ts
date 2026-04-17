@@ -139,7 +139,9 @@ export const authMutations = {
       userId,
       storeId: uuidv4(),
       storeName: username,
-      isActive: false,
+      isActive: true,
+      isApproved: false,
+      approveStatus: null,
       isPromoted: false,
       type: "basic",
       totalSales: 0,
@@ -147,6 +149,7 @@ export const authMutations = {
       negativeReviews: 0,
       reviews: [],
       createdAt: new Date().toISOString(),
+      requestCount: 0,
     };
 
     await stores.insertOne(store);
@@ -360,7 +363,9 @@ export const authMutations = {
       userId,
       storeId: uuidv4(),
       storeName: username,
-      isActive: false,
+      isActive: true,
+      isApproved: false,
+      approveStatus: null,
       isPromoted: false,
       type: "basic",
       totalSales: 0,
@@ -368,6 +373,7 @@ export const authMutations = {
       negativeReviews: 0,
       reviews: [],
       createdAt: registered,
+      requestCount: 0,
     });
 
     const secret = process.env.JWT_SECRET;

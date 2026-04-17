@@ -20,12 +20,15 @@ export const userFieldResolvers = {
       storeId: storeDoc.storeId,
       storeName: storeDoc.storeName,
       isActive: storeDoc.isActive,
+      isApproved: storeDoc.isApproved,
+      approveStatus: storeDoc.approveStatus ?? null,
       isPromoted: storeDoc.isPromoted,
       type: storeDoc.type,
       totalSales: storeDoc.totalSales,
       positiveReviews: storeDoc.positiveReviews,
       negativeReviews: storeDoc.negativeReviews,
       registered: storeDoc.createdAt?.split("T")[0] || storeDoc.createdAt,
+      requestCount: storeDoc.requestCount ?? 0,
     };
   },
   wallet: async (parent: Record<string, unknown>) => {
@@ -66,6 +69,7 @@ export const userFieldResolvers = {
       isPromoted: p.isPromoted,
       available: p.available,
       sold: p.sold,
+      type: p.type,
       createdAt: p.createdAt,
     }));
   },
@@ -147,11 +151,14 @@ export const usersQueries = {
         storeId: storeDoc.storeId,
         storeName: storeDoc.storeName,
         isActive: storeDoc.isActive,
+        isApproved: storeDoc.isApproved,
+        approveStatus: storeDoc.approveStatus ?? null,
         type: storeDoc.type,
         totalSales: storeDoc.totalSales,
         positiveReviews: storeDoc.positiveReviews,
         negativeReviews: storeDoc.negativeReviews,
         registered: storeDoc.createdAt?.split("T")[0] || storeDoc.createdAt,
+        requestCount: storeDoc.requestCount ?? 0,
       },
     };
   },

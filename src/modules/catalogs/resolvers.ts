@@ -3,11 +3,85 @@ import { allGroups } from "../../../data/categories/index.js";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
-import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction } from "../../types.js";
+import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction, VerificationRequest } from "../../types.js";
 import type { Context } from "../../index.js";
 import countryData from "../../../data/country.json";
+import bcrypt from "bcryptjs";
+import nodemailer from "nodemailer";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
+
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
+
+// Rate limiting for adminAuthorizeStore
+const adminAttempts = new Map<string, { count: number; lockedUntil: number }>();
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+
+// Verification image limits
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+const ALLOWED_IMAGE_SIGNATURES: Record<string, string> = {
+  "/9j/": "image/jpeg",
+  iVBORw0KGgo: "image/png",
+  R0lGODlh: "image/gif",
+  UklGR: "image/webp",
+};
+
+function validateBase64Image(base64: string, fieldName: string): void {
+  // Strip data URI prefix if present
+  const raw = base64.replace(/^data:image\/\w+;base64,/, "");
+
+  // Check size (base64 is ~33% larger than binary)
+  const sizeInBytes = Math.ceil((raw.length * 3) / 4);
+  if (sizeInBytes > MAX_IMAGE_SIZE) {
+    throw new GraphQLError(`${fieldName} exceeds the 5MB size limit`, {
+      extensions: { code: "BAD_USER_INPUT" },
+    });
+  }
+
+  // Validate it's actually an image by checking magic bytes
+  const isImage = Object.keys(ALLOWED_IMAGE_SIGNATURES).some((sig) =>
+    raw.startsWith(sig)
+  );
+  if (!isImage) {
+    throw new GraphQLError(
+      `${fieldName} must be a valid image (JPEG, PNG, GIF, or WebP)`,
+      { extensions: { code: "BAD_USER_INPUT" } }
+    );
+  }
+}
+
+function sanitizeTextInput(value: string, fieldName: string, maxLength: number = 200): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new GraphQLError(`${fieldName} is required`, {
+      extensions: { code: "BAD_USER_INPUT" },
+    });
+  }
+  if (trimmed.length > maxLength) {
+    throw new GraphQLError(`${fieldName} must not exceed ${maxLength} characters`, {
+      extensions: { code: "BAD_USER_INPUT" },
+    });
+  }
+  // Strip HTML tags and control characters
+  const sanitized = trimmed
+    .replace(/<[^>]*>/g, "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  if (sanitized.length === 0) {
+    throw new GraphQLError(`${fieldName} contains invalid content`, {
+      extensions: { code: "BAD_USER_INPUT" },
+    });
+  }
+  return sanitized;
+}
 const ALGORITHM = "aes-256-gcm";
 
 function encrypt(text: string): string {
@@ -97,6 +171,7 @@ export const catalogsQueries = {
           isPromoted: p.isPromoted,
           available: p.available,
           sold: p.sold,
+          type: p.type,
           createdAt: p.createdAt,
         },
         products: null,
@@ -139,6 +214,7 @@ export const catalogsQueries = {
         isPromoted: p.isPromoted,
         available: p.available,
         sold: p.sold,
+        type: p.type,
         createdAt: p.createdAt,
       },
     }));
@@ -305,6 +381,7 @@ export const catalogsQueries = {
         isPromoted: p.isPromoted,
         available: p.available,
         sold: p.sold,
+        type: p.type,
         createdAt: p.createdAt,
       },
     }));
@@ -611,18 +688,22 @@ export const catalogsQueries = {
         isPromoted: p.isPromoted,
         available: p.available,
         sold: p.sold,
+        type: p.type,
         createdAt: p.createdAt,
         store: s
           ? {
               storeId: s.storeId,
               storeName: s.storeName,
               isActive: s.isActive,
+              isApproved: s.isApproved,
+              approveStatus: s.approveStatus ?? null,
               isPromoted: s.isPromoted,
               type: s.type,
               totalSales: s.totalSales,
               positiveReviews: s.positiveReviews,
               negativeReviews: s.negativeReviews,
               registered: s.createdAt?.split("T")[0] || s.createdAt,
+              requestCount: s.requestCount ?? 0,
             }
           : null,
       };
@@ -720,12 +801,15 @@ export const catalogsQueries = {
       storeId: s.storeId,
       storeName: s.storeName,
       isActive: s.isActive,
+      isApproved: s.isApproved,
+      approveStatus: s.approveStatus ?? null,
       isPromoted: s.isPromoted,
       type: s.type,
       totalSales: s.totalSales,
       positiveReviews: s.positiveReviews,
       negativeReviews: s.negativeReviews,
       registered: s.createdAt?.split("T")[0] || s.createdAt,
+      requestCount: s.requestCount ?? 0,
     });
 
     // Promoted first, then non-promoted
@@ -855,18 +939,22 @@ export const catalogsQueries = {
         isPromoted: p.isPromoted,
         available: p.available,
         sold: p.sold,
+        type: p.type,
         createdAt: p.createdAt,
         store: s
           ? {
               storeId: s.storeId,
               storeName: s.storeName,
               isActive: s.isActive,
+              isApproved: s.isApproved,
+              approveStatus: s.approveStatus ?? null,
               isPromoted: s.isPromoted,
               type: s.type,
               totalSales: s.totalSales,
               positiveReviews: s.positiveReviews,
               negativeReviews: s.negativeReviews,
               registered: s.createdAt?.split("T")[0] || s.createdAt,
+              requestCount: s.requestCount ?? 0,
             }
           : null,
       };
@@ -958,18 +1046,22 @@ export const catalogsQueries = {
         isPromoted: product.isPromoted,
         available: product.available,
         sold: product.sold,
+        type: product.type,
         createdAt: product.createdAt,
         store: store
           ? {
               storeId: store.storeId,
               storeName: store.storeName,
               isActive: store.isActive,
+              isApproved: store.isApproved,
+              approveStatus: store.approveStatus ?? null,
               isPromoted: store.isPromoted,
               type: store.type,
               totalSales: store.totalSales,
               positiveReviews: store.positiveReviews,
               negativeReviews: store.negativeReviews,
               registered: store.createdAt?.split("T")[0] || store.createdAt,
+              requestCount: store.requestCount ?? 0,
             }
           : null,
       },
@@ -1029,6 +1121,7 @@ export const catalogsQueries = {
         isPromoted: p.isPromoted,
         available: p.available,
         sold: p.sold,
+        type: p.type,
         createdAt: p.createdAt,
       },
     }));
@@ -1041,12 +1134,15 @@ export const catalogsQueries = {
         storeId: store.storeId,
         storeName: store.storeName,
         isActive: store.isActive,
+        isApproved: store.isApproved,
+        approveStatus: store.approveStatus ?? null,
         isPromoted: store.isPromoted,
         type: store.type,
         totalSales: store.totalSales,
         positiveReviews: store.positiveReviews,
         negativeReviews: store.negativeReviews,
         registered: store.createdAt?.split("T")[0] || store.createdAt,
+        requestCount: store.requestCount ?? 0,
       },
       products: {
         edges,
@@ -1100,12 +1196,15 @@ export const catalogsQueries = {
         storeId: s.storeId,
         storeName: s.storeName,
         isActive: s.isActive,
+        isApproved: s.isApproved,
+        approveStatus: s.approveStatus ?? null,
         isPromoted: s.isPromoted,
         type: s.type,
         totalSales: s.totalSales,
         positiveReviews: s.positiveReviews,
         negativeReviews: s.negativeReviews,
         registered: s.createdAt?.split("T")[0] || s.createdAt,
+        requestCount: s.requestCount ?? 0,
       },
     }));
 
@@ -1126,12 +1225,55 @@ export const catalogsQueries = {
       },
     };
   },
+
+  getVerificationRequest: async (
+    _: unknown,
+    { storeId, superkey }: { storeId: string; superkey: string }
+  ) => {
+    const db = getDB();
+
+    // Verify superkey
+    const admin = await db.collection("Admin").findOne({ key: "superkey" });
+    if (!admin) {
+      return { code: 500, success: false, message: "Admin configuration missing", verification: null };
+    }
+
+    const isValid = await bcrypt.compare(superkey, admin.value);
+    if (!isValid) {
+      return { code: 403, success: false, message: "Invalid superkey", verification: null };
+    }
+
+    const verification = await db.collection<VerificationRequest>("Verification").findOne({ storeId });
+    if (!verification) {
+      return { code: 404, success: false, message: "No verification request found for this store", verification: null };
+    }
+
+    return {
+      code: 200,
+      success: true,
+      message: "Verification request retrieved",
+      verification: {
+        userId: verification.userId,
+        storeId: verification.storeId,
+        storeName: verification.storeName,
+        surname: verification.surname,
+        otherNames: verification.otherNames,
+        gender: verification.gender,
+        dateOfBirth: verification.dateOfBirth,
+        address: verification.address,
+        nationality: verification.nationality,
+        identification: verification.identification,
+        proofPerson: verification.proofPerson,
+        submittedAt: verification.submittedAt,
+      },
+    };
+  },
 };
 
 export const catalogsMutations = {
   addProduct: async (
     _: unknown,
-    { input }: { input: { catalog: string; category: string; region: string; name: string; description: string; marketPrice: number; price: number } },
+    { input }: { input: { catalog: string; category: string; region: string; name: string; description: string; marketPrice: number; price: number; type: string } },
     context: Context
   ) => {
     if (!context.user) {
@@ -1199,6 +1341,12 @@ export const catalogsMutations = {
       return { code: 400, success: false, message: "Price cannot exceed market price", product: null };
     }
 
+    // Validate type
+    const productType = input.type;
+    if (productType !== "Auto" && productType !== "Manual") {
+      return { code: 400, success: false, message: "Type must be either 'Auto' or 'Manual'", product: null };
+    }
+
     // Validate catalog exists
     const group = allGroups.find(
       (g) => g.title.toLowerCase() === catalog.toLowerCase()
@@ -1235,6 +1383,7 @@ export const catalogsMutations = {
       marketPrice: parseFloat(marketPrice.toFixed(2)),
       price: parseFloat(price.toFixed(2)),
       discount,
+      type: productType as "Auto" | "Manual",
       isActive: false,
       isPromoted: false,
       available: 0,
@@ -1265,6 +1414,7 @@ export const catalogsMutations = {
         isPromoted: product.isPromoted,
         available: product.available,
         sold: product.sold,
+        type: product.type,
         createdAt: product.createdAt,
       },
     };
@@ -1684,6 +1834,7 @@ export const catalogsMutations = {
           isPromoted: true,
           available: product.available,
           sold: product.sold,
+          type: product.type,
           createdAt: product.createdAt,
         },
       },
@@ -1799,14 +1950,324 @@ export const catalogsMutations = {
           storeId: store.storeId,
           storeName: store.storeName,
           isActive: store.isActive,
+          isApproved: store.isApproved,
+          approveStatus: store.approveStatus ?? null,
           isPromoted: true,
           type: store.type,
           totalSales: store.totalSales,
           positiveReviews: store.positiveReviews,
           negativeReviews: store.negativeReviews,
           registered: store.createdAt?.split("T")[0] || store.createdAt,
+          requestCount: store.requestCount ?? 0,
         },
       },
     };
+  },
+
+  requestStoreAccess: async (
+    _: unknown,
+    { input }: {
+      input: {
+        surname: string;
+        otherNames: string;
+        gender: string;
+        dateOfBirth: string;
+        address: string;
+        nationality: string;
+        identification: string;
+        proofPerson: string;
+      };
+    },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found" };
+    }
+
+    if (store.isApproved) {
+      return { code: 400, success: false, message: "Store is already approved" };
+    }
+
+    if (store.approveStatus === "pending") {
+      return { code: 400, success: false, message: "Verification request is already pending" };
+    }
+
+    if (store.requestCount >= 3) {
+      return { code: 400, success: false, message: "Maximum verification requests reached (3). No more attempts allowed" };
+    }
+
+    // Check if a pending verification request already exists
+    const existing = await db.collection<VerificationRequest>("Verification").findOne({ userId });
+    if (existing) {
+      return { code: 400, success: false, message: "Verification request already submitted" };
+    }
+
+    // Sanitize text inputs
+    const surname = sanitizeTextInput(input.surname, "Surname", 100);
+    const otherNames = sanitizeTextInput(input.otherNames, "Other names", 100);
+    const gender = sanitizeTextInput(input.gender, "Gender", 20);
+    const dateOfBirth = sanitizeTextInput(input.dateOfBirth, "Date of birth", 10);
+    const address = sanitizeTextInput(input.address, "Address", 300);
+    const nationality = sanitizeTextInput(input.nationality, "Nationality", 100);
+
+    // Validate gender
+    const validGenders = ["Male", "Female", "Other"];
+    if (!validGenders.includes(gender)) {
+      return { code: 400, success: false, message: "Gender must be Male, Female, or Other" };
+    }
+
+    // Validate date of birth format (YYYY-MM-DD)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) || isNaN(Date.parse(dateOfBirth))) {
+      return { code: 400, success: false, message: "Date of birth must be in YYYY-MM-DD format" };
+    }
+
+    // Validate images
+    validateBase64Image(input.identification, "Identification");
+    validateBase64Image(input.proofPerson, "Proof of person");
+
+    // Store verification request in Main DB
+    const verificationDoc: VerificationRequest = {
+      userId,
+      storeId: store.storeId,
+      storeName: store.storeName,
+      surname,
+      otherNames,
+      gender,
+      dateOfBirth,
+      address,
+      nationality,
+      identification: input.identification,
+      proofPerson: input.proofPerson,
+      submittedAt: new Date().toISOString(),
+    };
+
+    await db.collection<VerificationRequest>("Verification").insertOne(verificationDoc);
+
+    // Update store: set approval to pending and increment request count
+    await catalogsDB.collection<Store>("Stores").updateOne(
+      { userId },
+      { $set: { approveStatus: "pending" }, $inc: { requestCount: 1 } }
+    );
+
+    // Get user details for the email
+    const user = await db.collection<User>("users").findOne({ id: userId });
+
+    // Send email notification to admin with images attached
+    const adminEmail = process.env.ADMIN_EMAIL;
+    if (adminEmail && user) {
+      try {
+        // Extract raw base64 and detect content type for attachments
+        const idRaw = input.identification.replace(/^data:image\/\w+;base64,/, "");
+        const ppRaw = input.proofPerson.replace(/^data:image\/\w+;base64,/, "");
+
+        const detectContentType = (b64: string): string => {
+          if (b64.startsWith("/9j/")) return "image/jpeg";
+          if (b64.startsWith("iVBORw0KGgo")) return "image/png";
+          if (b64.startsWith("R0lGODlh")) return "image/gif";
+          if (b64.startsWith("UklGR")) return "image/webp";
+          return "image/jpeg";
+        };
+
+        const idContentType = detectContentType(idRaw);
+        const ppContentType = detectContentType(ppRaw);
+        const idExt = idContentType.split("/")[1];
+        const ppExt = ppContentType.split("/")[1];
+
+        await smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: adminEmail,
+          subject: "New Store Access Request - Gameket",
+          html: `
+            <h2>New Store Access Request</h2>
+            <p>A user has requested to become a seller on Gameket.</p>
+            <table style="border-collapse: collapse; width: 100%; max-width: 500px;">
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Username</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${user.username}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Email</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${user.email}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Surname</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${surname}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Other Names</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${otherNames}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Gender</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${gender}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Date of Birth</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${dateOfBirth}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Nationality</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${nationality}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Address</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${address}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Store ID</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${store.storeId}</td></tr>
+              <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Store Name</strong></td><td style="padding: 8px; border: 1px solid #ddd;">${store.storeName}</td></tr>
+            </table>
+            <h3 style="margin-top: 20px;">Identification Document</h3>
+            <img src="cid:identification" style="max-width: 500px; border: 1px solid #ccc;" />
+            <h3 style="margin-top: 20px;">Proof of Person</h3>
+            <img src="cid:proofPerson" style="max-width: 500px; border: 1px solid #ccc;" />
+          `,
+          attachments: [
+            {
+              filename: `identification.${idExt}`,
+              content: idRaw,
+              encoding: "base64",
+              cid: "identification",
+              contentType: idContentType,
+            },
+            {
+              filename: `proof-person.${ppExt}`,
+              content: ppRaw,
+              encoding: "base64",
+              cid: "proofPerson",
+              contentType: ppContentType,
+            },
+          ],
+        });
+      } catch (emailError) {
+        console.error("Failed to send admin email:", emailError);
+      }
+    }
+
+    return { code: 200, success: true, message: "Verification request submitted successfully" };
+  },
+
+  adminAuthorizeStore: async (
+    _: unknown,
+    { storeId, superkey }: { storeId: string; superkey: string }
+  ) => {
+    // Rate limiting: track by storeId
+    const now = Date.now();
+    const attempt = adminAttempts.get(storeId);
+    if (attempt) {
+      if (attempt.lockedUntil > now) {
+        const minutesLeft = Math.ceil((attempt.lockedUntil - now) / 60000);
+        return { code: 429, success: false, message: `Too many attempts. Try again in ${minutesLeft} minute(s)` };
+      }
+      if (attempt.lockedUntil <= now && attempt.count >= MAX_ATTEMPTS) {
+        adminAttempts.delete(storeId);
+      }
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    // Retrieve the stored bcrypt hash of the superkey
+    const adminDoc = await db.collection("Admin").findOne({ key: "superkey" });
+    if (!adminDoc) {
+      return { code: 500, success: false, message: "Server configuration error" };
+    }
+
+    const isValid = await bcrypt.compare(superkey, adminDoc.value);
+    if (!isValid) {
+      const current = adminAttempts.get(storeId) || { count: 0, lockedUntil: 0 };
+      current.count += 1;
+      if (current.count >= MAX_ATTEMPTS) {
+        current.lockedUntil = now + LOCKOUT_DURATION;
+      }
+      adminAttempts.set(storeId, current);
+      return { code: 403, success: false, message: "Invalid superkey" };
+    }
+
+    // Clear attempts on success
+    adminAttempts.delete(storeId);
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found" };
+    }
+
+    if (store.isApproved) {
+      return { code: 400, success: false, message: "Store is already approved" };
+    }
+
+    await catalogsDB.collection<Store>("Stores").updateOne(
+      { storeId },
+      { $set: { isApproved: true, approveStatus: "success" } }
+    );
+
+    return { code: 200, success: true, message: "Store authorized successfully" };
+  },
+
+  adminRejectStore: async (
+    _: unknown,
+    { storeId, superkey }: { storeId: string; superkey: string }
+  ) => {
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const adminDoc = await db.collection("Admin").findOne({ key: "superkey" });
+    if (!adminDoc) {
+      return { code: 500, success: false, message: "Server configuration error" };
+    }
+
+    const isValid = await bcrypt.compare(superkey, adminDoc.value);
+    if (!isValid) {
+      return { code: 403, success: false, message: "Invalid superkey" };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found" };
+    }
+
+    if (store.approveStatus !== "pending") {
+      return { code: 400, success: false, message: "Store does not have a pending request" };
+    }
+
+    await catalogsDB.collection<Store>("Stores").updateOne(
+      { storeId },
+      { $set: { approveStatus: "failed" } }
+    );
+
+    // Delete the verification doc so user can resubmit with new data
+    await db.collection<VerificationRequest>("Verification").deleteOne({ storeId });
+
+    return { code: 200, success: true, message: "Store request rejected" };
+  },
+
+  uploadImage: async (
+    _: unknown,
+    { image }: { image: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const apiKey = process.env.IMGBB_API_KEY;
+    if (!apiKey) {
+      return { code: 500, success: false, message: "Image upload not configured", url: null, deleteUrl: null };
+    }
+
+    try {
+      const formData = new URLSearchParams();
+      formData.append("key", apiKey);
+      formData.append("image", image);
+
+      const response = await fetch("https://api.imgbb.com/1/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json() as { success: boolean; data?: { url: string; delete_url: string }; error?: { message: string } };
+
+      if (!data.success) {
+        return { code: 400, success: false, message: data.error?.message || "Image upload failed", url: null, deleteUrl: null };
+      }
+
+      return {
+        code: 200,
+        success: true,
+        message: "Image uploaded successfully",
+        url: data.data!.url,
+        deleteUrl: data.data!.delete_url,
+      };
+    } catch (error) {
+      return { code: 500, success: false, message: "Image upload failed", url: null, deleteUrl: null };
+    }
   },
 };

@@ -3,12 +3,15 @@ export const catalogsTypeDefs = `#graphql
     storeId: ID!
     storeName: String!
     isActive: Boolean!
+    isApproved: Boolean!
+    approveStatus: String
     isPromoted: Boolean!
     type: String!
     totalSales: Int!
     positiveReviews: Int!
     negativeReviews: Int!
     registered: String!
+    requestCount: Int!
   }
 
   type CategoryNode {
@@ -168,6 +171,7 @@ export const catalogsTypeDefs = `#graphql
     isPromoted: Boolean!
     available: Int!
     sold: Int!
+    type: String!
     createdAt: String!
     store: StoreDetails
   }
@@ -234,6 +238,7 @@ export const catalogsTypeDefs = `#graphql
     getProductDetails(productId: ID!): GetProductDetailsResponse!
     getStoreDetails(storeId: ID!, first: Int, after: String, last: Int, before: String): GetStoreDetailsPublicResponse!
     getStores(first: Int, after: String, last: Int, before: String): GetStoresResponse!
+    getVerificationRequest(storeId: ID!, superkey: String!): GetVerificationRequestResponse!
   }
 
   enum ProductSort {
@@ -256,6 +261,7 @@ export const catalogsTypeDefs = `#graphql
     isPromoted: Boolean!
     available: Int!
     sold: Int!
+    type: String!
     createdAt: String!
   }
 
@@ -267,6 +273,7 @@ export const catalogsTypeDefs = `#graphql
     description: String!
     marketPrice: Float!
     price: Float!
+    type: String!
   }
 
   type AddProductResponse {
@@ -382,6 +389,59 @@ export const catalogsTypeDefs = `#graphql
     promotion: PromotedStoreDetails
   }
 
+  input RequestStoreAccessInput {
+    surname: String!
+    otherNames: String!
+    gender: String!
+    dateOfBirth: String!
+    address: String!
+    nationality: String!
+    identification: String!
+    proofPerson: String!
+  }
+
+  type RequestStoreAccessResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+  }
+
+  type VerificationDetails {
+    userId: String!
+    storeId: String!
+    storeName: String!
+    surname: String!
+    otherNames: String!
+    gender: String!
+    dateOfBirth: String!
+    address: String!
+    nationality: String!
+    identification: String!
+    proofPerson: String!
+    submittedAt: String!
+  }
+
+  type GetVerificationRequestResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    verification: VerificationDetails
+  }
+
+  type AdminAuthorizeStoreResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+  }
+
+  type UploadImageResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    url: String
+    deleteUrl: String
+  }
+
   extend type Mutation {
     addProduct(input: AddProductInput!): AddProductResponse!
     updateProduct(input: UpdateProductInput!): UpdateProductResponse!
@@ -391,5 +451,9 @@ export const catalogsTypeDefs = `#graphql
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!
     advertiseStore(input: AdvertiseStoreInput!): AdvertiseStoreResponse!
+    requestStoreAccess(input: RequestStoreAccessInput!): RequestStoreAccessResponse!
+    adminAuthorizeStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
+    adminRejectStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
+    uploadImage(image: String!): UploadImageResponse!
   }
 `;

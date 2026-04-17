@@ -90,6 +90,7 @@ export interface Product {
   isPromoted: boolean;
   available: number;
   sold: number;
+  type: "Auto" | "Manual";
   availableCodes: string[];
   soldCodes: string[];
   createdAt: string;
@@ -110,6 +111,8 @@ export interface Store {
   storeId: string;
   storeName: string;
   isActive: boolean;
+  isApproved: boolean;
+  approveStatus: string | null;
   isPromoted: boolean;
   type: string;
   totalSales: number;
@@ -117,6 +120,7 @@ export interface Store {
   negativeReviews: number;
   reviews: Review[];
   createdAt: string;
+  requestCount: number;
 }
 
 export interface PromotedStore {
@@ -126,4 +130,19 @@ export interface PromotedStore {
   campaignStart: string;
   campaignEnd: string;
   createdAt: string;
+}
+
+export interface VerificationRequest {
+  userId: string;
+  storeId: string;
+  storeName: string;
+  surname: string;
+  otherNames: string;
+  gender: string;
+  dateOfBirth: string;
+  address: string;
+  nationality: string;
+  identification: string;
+  proofPerson: string;
+  submittedAt: string;
 }
