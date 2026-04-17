@@ -43,6 +43,12 @@ export const authMutations = {
       return { code: 400, success: false, message: "Username must not contain spaces", user: null };
     }
 
+    // Block usernames resembling "Gameket" to prevent impersonation
+    const normalized = username.toLowerCase().replace(/[^a-z]/g, "");
+    if (normalized.includes("gameket") || normalized.includes("gamket") || normalized.includes("gamekets") || normalized.includes("gam3ket") || normalized.includes("gamek3t")) {
+      return { code: 400, success: false, message: "This username is not allowed", user: null };
+    }
+
     // Validate country
     if (country.length === 0) {
       return { code: 400, success: false, message: "Country is required", user: null };

@@ -42,7 +42,10 @@ export interface Deposit {
   payId: string;
   transactionId: string;
   paymentMethod: string;
+  paymentLink: string;
   amount: number;
+  fee: number;
+  totalCharged: number;
   status: string;
 }
 

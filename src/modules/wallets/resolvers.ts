@@ -138,23 +138,24 @@ export const walletsMutations = {
     const { amount } = input;
 
     if (amount <= 0) {
-      return { code: 400, success: false, message: "Amount must be greater than 0", deposit: null, paymentData: null };
+      return { code: 400, success: false, message: "Amount must be greater than 0", deposit: null, payId: null, paymentLink: null };
     }
 
     const db = getDB();
     const user = await db.collection<User>("users").findOne({ id: userId });
 
     if (!user) {
-      return { code: 404, success: false, message: "User not found", deposit: null, paymentData: null };
+      return { code: 404, success: false, message: "User not found", deposit: null, payId: null, paymentLink: null };
     }
 
     if (!user.isVerified) {
-      return { code: 403, success: false, message: "Please verify your account before making a deposit", deposit: null, paymentData: null };
+      return { code: 403, success: false, message: "Please verify your account before making a deposit", deposit: null, payId: null, paymentLink: null };
     }
 
-    // 0.2% fee for regular users, 0% for premium
+    // 0.2% fee for regular users, 0% for premium (minimum 0.1 for non-premium)
     const feeRate = user.isPremium ? 0 : 0.002;
-    const fee = Math.round(amount * feeRate * 100) / 100;
+    const rawFee = Math.round(amount * feeRate * 100) / 100;
+    const fee = user.isPremium ? 0 : Math.max(rawFee, 0.1);
     const totalCharged = Math.round((amount + fee) * 100) / 100;
 
     const apiKey = process.env.GAMEKET_PAY_API_KEY;
@@ -178,7 +179,8 @@ export const walletsMutations = {
           success: false,
           message: "Payment service error",
           deposit: null,
-          paymentData: null,
+          payId: null,
+          paymentLink: null,
         };
       }
     } catch {
@@ -187,7 +189,8 @@ export const walletsMutations = {
         success: false,
         message: "Unable to reach payment service",
         deposit: null,
-        paymentData: null,
+        payId: null,
+        paymentLink: null,
       };
     }
 
@@ -196,19 +199,36 @@ export const walletsMutations = {
       .toString("base64")
       .replace(/[+/=]/g, "");
 
-    const payId = String(paymentResponse.id || paymentResponse.payId || "");
+    const payId = String(paymentResponse.transaction?.txnid || "");
+    const paymentLink = String(paymentResponse.paymentLink || "");
 
     const walletsDB = getWalletsDB();
+    const now = new Date().toISOString();
+
     const depositRecord: Deposit = {
       userId,
       payId,
       transactionId,
       paymentMethod: "Webcheckout",
-      amount: totalCharged,
+      paymentLink,
+      amount,
+      fee,
+      totalCharged,
       status: "pending",
     };
 
+    const transactionRecord: Transaction = {
+      userId,
+      id: transactionId,
+      type: "Deposit",
+      status: "pending",
+      method: "Webcheckout",
+      amount,
+      createdAt: now,
+    };
+
     await walletsDB.collection<Deposit>("Deposits").insertOne(depositRecord);
+    await walletsDB.collection<Transaction>("Transactions").insertOne(transactionRecord);
 
     return {
       code: 200,
@@ -220,7 +240,8 @@ export const walletsMutations = {
         fee,
         totalCharged,
       },
-      paymentData: JSON.stringify(paymentResponse),
+      payId,
+      paymentLink,
     };
   },
 

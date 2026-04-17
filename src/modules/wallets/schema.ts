@@ -28,7 +28,8 @@ export const walletsTypeDefs = `#graphql
     message: String!
     user: User
     deposit: DepositDetails
-    paymentData: String
+    payId: String
+    paymentLink: String
   }
 
   type GetUserWalletsResponse {
