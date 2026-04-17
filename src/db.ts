@@ -18,6 +18,13 @@ export async function connectDB(): Promise<Db> {
   catalogsDb = client.db("Catalogs");
 
   console.log("✅ Connected to MongoDB");
+
+  // Backfill createdAt for existing stores that don't have it
+  await catalogsDb.collection("Stores").updateMany(
+    { createdAt: { $exists: false } },
+    { $set: { createdAt: new Date().toISOString() } }
+  );
+
   return db;
 }
 

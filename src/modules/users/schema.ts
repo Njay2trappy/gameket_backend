@@ -1,15 +1,4 @@
 export const usersTypeDefs = `#graphql
-  type StoreDetails {
-    storeId: ID!
-    storeName: String!
-    isActive: Boolean!
-    isPromoted: Boolean!
-    type: String!
-    totalSales: Int!
-    positiveReviews: Int!
-    negativeReviews: Int!
-  }
-
   type UserDetailsResponse {
     code: Int!
     success: Boolean!

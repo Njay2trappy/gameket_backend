@@ -142,6 +142,7 @@ export const authMutations = {
       positiveReviews: 0,
       negativeReviews: 0,
       reviews: [],
+      createdAt: new Date().toISOString(),
     };
 
     await stores.insertOne(store);

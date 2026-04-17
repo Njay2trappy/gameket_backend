@@ -115,6 +115,7 @@ export interface Store {
   positiveReviews: number;
   negativeReviews: number;
   reviews: Review[];
+  createdAt: string;
 }
 
 export interface PromotedStore {

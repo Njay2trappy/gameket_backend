@@ -1,4 +1,16 @@
 export const catalogsTypeDefs = `#graphql
+  type StoreDetails {
+    storeId: ID!
+    storeName: String!
+    isActive: Boolean!
+    isPromoted: Boolean!
+    type: String!
+    totalSales: Int!
+    positiveReviews: Int!
+    negativeReviews: Int!
+    registered: Date!
+  }
+
   type CategoryNode {
     slug: String!
     name: String!
@@ -110,7 +122,7 @@ export const catalogsTypeDefs = `#graphql
 
   type PromotedProductEdge {
     cursor: String!
-    node: PromotedProductDetails!
+    node: GetProductsProductDetails!
   }
 
   type PromotedProductConnection {
@@ -127,7 +139,7 @@ export const catalogsTypeDefs = `#graphql
 
   type PromotedStoreEdge {
     cursor: String!
-    node: PromotedStoreDetails!
+    node: StoreDetails!
   }
 
   type PromotedStoreConnection {
@@ -139,7 +151,7 @@ export const catalogsTypeDefs = `#graphql
     code: Int!
     success: Boolean!
     message: String!
-    stores: PromotedStoreConnection
+    store: PromotedStoreConnection
   }
 
   type GetProductsProductDetails {

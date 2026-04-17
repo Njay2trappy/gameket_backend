@@ -552,79 +552,86 @@ export const catalogsQueries = {
     const catalogsDB = getCatalogsDB();
     const now = new Date().toISOString();
 
+    // Get active promotions
     const activePromotions = await catalogsDB
       .collection<PromotedProduct>("PromotedProducts")
       .find({ campaignEnd: { $gte: now } })
       .sort({ amount: -1 })
       .toArray();
 
-    if (!activePromotions.length) {
+    const promotedProductIds = new Set(activePromotions.map((p) => p.productId));
+
+    // Get all active products
+    const allActiveProducts = await catalogsDB
+      .collection<Product>("Products")
+      .find({ isActive: true })
+      .toArray();
+
+    if (!allActiveProducts.length) {
       return {
         code: 200,
         success: true,
-        message: "No promoted products found",
+        message: "No products found",
         products: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
       };
     }
 
-    const productIds = activePromotions.map((p) => p.productId);
-    const products = await catalogsDB
-      .collection<Product>("Products")
-      .find({ productId: { $in: productIds }, isActive: true })
-      .toArray();
+    // Split into promoted and non-promoted
+    const promoted = allActiveProducts.filter((p) => promotedProductIds.has(p.productId));
+    const nonPromoted = allActiveProducts.filter((p) => !promotedProductIds.has(p.productId));
 
-    const productMap = new Map(products.map((p) => [p.productId, p]));
+    // Sort promoted by ad spend descending
+    const promoAmountMap = new Map(activePromotions.map((p) => [p.productId, p.amount]));
+    promoted.sort((a, b) => (promoAmountMap.get(b.productId) || 0) - (promoAmountMap.get(a.productId) || 0));
 
-    const storeUserIds = [...new Set(activePromotions.map((p) => p.userId))];
+    // Sort non-promoted by recently added to oldest
+    nonPromoted.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Fetch store details
+    const storeUserIds = [...new Set(allActiveProducts.map((p) => p.userId))];
     const stores = await catalogsDB
       .collection<Store>("Stores")
       .find({ userId: { $in: storeUserIds } })
       .toArray();
     const storeMap = new Map(stores.map((s) => [s.userId, s]));
 
-    const allPromotedProducts = activePromotions
-      .filter((promo) => productMap.has(promo.productId))
-      .map((promo) => {
-        const p = productMap.get(promo.productId)!;
-        const s = storeMap.get(promo.userId);
-        return {
-          productId: promo.productId,
-          amount: promo.amount,
-          campaignStart: promo.campaignStart,
-          campaignEnd: promo.campaignEnd,
-          createdAt: promo.createdAt,
-          product: {
-            productId: p.productId,
-            catalog: p.catalog,
-            category: p.category,
-            region: p.region,
-            name: p.name,
-            description: p.description,
-            marketPrice: p.marketPrice,
-            price: p.price,
-            discount: p.discount,
-            isActive: p.isActive,
-            isPromoted: p.isPromoted,
-            available: p.available,
-            sold: p.sold,
-            createdAt: p.createdAt,
-          },
-          store: s
-            ? {
-                storeId: s.storeId,
-                storeName: s.storeName,
-                isActive: s.isActive,
-                isPromoted: s.isPromoted,
-                type: s.type,
-                totalSales: s.totalSales,
-                positiveReviews: s.positiveReviews,
-                negativeReviews: s.negativeReviews,
-              }
-            : null,
-        };
-      });
+    const mapProduct = (p: Product) => {
+      const s = storeMap.get(p.userId);
+      return {
+        productId: p.productId,
+        catalog: p.catalog,
+        category: p.category,
+        region: p.region,
+        name: p.name,
+        description: p.description,
+        marketPrice: p.marketPrice,
+        price: p.price,
+        discount: p.discount,
+        isActive: p.isActive,
+        isPromoted: p.isPromoted,
+        available: p.available,
+        sold: p.sold,
+        createdAt: p.createdAt,
+        store: s
+          ? {
+              storeId: s.storeId,
+              storeName: s.storeName,
+              isActive: s.isActive,
+              isPromoted: s.isPromoted,
+              type: s.type,
+              totalSales: s.totalSales,
+              positiveReviews: s.positiveReviews,
+              negativeReviews: s.negativeReviews,
+              registered: s.createdAt,
+            }
+          : null,
+      };
+    };
 
-    const total = allPromotedProducts.length;
+    // Promoted first, then non-promoted
+    const merged = [...promoted.map(mapProduct), ...nonPromoted.map(mapProduct)];
+
+    const total = merged.length;
     const defaultPageSize = 30;
     const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
     let start = 0;
@@ -642,7 +649,7 @@ export const catalogsQueries = {
       start = Math.max(total - last, 0);
     }
 
-    const sliced = allPromotedProducts.slice(start, end);
+    const sliced = merged.slice(start, end);
 
     const edges = sliced.map((item, i) => ({
       cursor: encodeCursor(start + i),
@@ -652,7 +659,7 @@ export const catalogsQueries = {
     return {
       code: 200,
       success: true,
-      message: `${total} promoted product(s) found`,
+      message: `${total} product(s) found`,
       products: {
         edges,
         pageInfo: {
@@ -674,53 +681,57 @@ export const catalogsQueries = {
     const catalogsDB = getCatalogsDB();
     const now = new Date().toISOString();
 
+    // Get active promotions
     const activePromotions = await catalogsDB
       .collection<PromotedStore>("PromotedStores")
       .find({ campaignEnd: { $gte: now } })
       .sort({ amount: -1 })
       .toArray();
 
-    if (!activePromotions.length) {
+    const promotedStoreIds = new Set(activePromotions.map((p) => p.storeId));
+
+    // Get all active stores
+    const allActiveStores = await catalogsDB
+      .collection<Store>("Stores")
+      .find({ isActive: true })
+      .toArray();
+
+    if (!allActiveStores.length) {
       return {
         code: 200,
         success: true,
-        message: "No promoted stores found",
-        stores: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+        message: "No stores found",
+        store: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
       };
     }
 
-    const storeIds = activePromotions.map((p) => p.storeId);
-    const stores = await catalogsDB
-      .collection<Store>("Stores")
-      .find({ storeId: { $in: storeIds }, isActive: true })
-      .toArray();
+    // Split into promoted and non-promoted
+    const promoted = allActiveStores.filter((s) => promotedStoreIds.has(s.storeId));
+    const nonPromoted = allActiveStores.filter((s) => !promotedStoreIds.has(s.storeId));
 
-    const storeMap = new Map(stores.map((s) => [s.storeId, s]));
+    // Sort promoted by ad spend descending
+    const promoAmountMap = new Map(activePromotions.map((p) => [p.storeId, p.amount]));
+    promoted.sort((a, b) => (promoAmountMap.get(b.storeId) || 0) - (promoAmountMap.get(a.storeId) || 0));
 
-    const allPromotedStores = activePromotions
-      .filter((promo) => storeMap.has(promo.storeId))
-      .map((promo) => {
-        const s = storeMap.get(promo.storeId)!;
-        return {
-          storeId: promo.storeId,
-          amount: promo.amount,
-          campaignStart: promo.campaignStart,
-          campaignEnd: promo.campaignEnd,
-          createdAt: promo.createdAt,
-          store: {
-            storeId: s.storeId,
-            storeName: s.storeName,
-            isActive: s.isActive,
-            isPromoted: s.isPromoted,
-            type: s.type,
-            totalSales: s.totalSales,
-            positiveReviews: s.positiveReviews,
-            negativeReviews: s.negativeReviews,
-          },
-        };
-      });
+    // Sort non-promoted by highest sales to lowest
+    nonPromoted.sort((a, b) => b.totalSales - a.totalSales);
 
-    const total = allPromotedStores.length;
+    const mapStore = (s: Store) => ({
+      storeId: s.storeId,
+      storeName: s.storeName,
+      isActive: s.isActive,
+      isPromoted: s.isPromoted,
+      type: s.type,
+      totalSales: s.totalSales,
+      positiveReviews: s.positiveReviews,
+      negativeReviews: s.negativeReviews,
+      registered: s.createdAt,
+    });
+
+    // Promoted first, then non-promoted
+    const merged = [...promoted.map(mapStore), ...nonPromoted.map(mapStore)];
+
+    const total = merged.length;
     const defaultPageSize = 10;
     const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
     let start = 0;
@@ -738,7 +749,7 @@ export const catalogsQueries = {
       start = Math.max(total - last, 0);
     }
 
-    const sliced = allPromotedStores.slice(start, end);
+    const sliced = merged.slice(start, end);
 
     const edges = sliced.map((item, i) => ({
       cursor: encodeCursor(start + i),
@@ -748,8 +759,8 @@ export const catalogsQueries = {
     return {
       code: 200,
       success: true,
-      message: `${total} promoted store(s) found`,
-      stores: {
+      message: `${total} store(s) found`,
+      store: {
         edges,
         pageInfo: {
           hasNextPage: end < total,
@@ -855,6 +866,7 @@ export const catalogsQueries = {
               totalSales: s.totalSales,
               positiveReviews: s.positiveReviews,
               negativeReviews: s.negativeReviews,
+              registered: s.createdAt,
             }
           : null,
       };
@@ -957,6 +969,7 @@ export const catalogsQueries = {
               totalSales: store.totalSales,
               positiveReviews: store.positiveReviews,
               negativeReviews: store.negativeReviews,
+              registered: store.createdAt,
             }
           : null,
       },
@@ -1033,6 +1046,7 @@ export const catalogsQueries = {
         totalSales: store.totalSales,
         positiveReviews: store.positiveReviews,
         negativeReviews: store.negativeReviews,
+        registered: store.createdAt,
       },
       products: {
         edges,
@@ -1091,6 +1105,7 @@ export const catalogsQueries = {
         totalSales: s.totalSales,
         positiveReviews: s.positiveReviews,
         negativeReviews: s.negativeReviews,
+        registered: s.createdAt,
       },
     }));
 
@@ -1789,6 +1804,7 @@ export const catalogsMutations = {
           totalSales: store.totalSales,
           positiveReviews: store.positiveReviews,
           negativeReviews: store.negativeReviews,
+          registered: store.createdAt,
         },
       },
     };
