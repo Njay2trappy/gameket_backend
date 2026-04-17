@@ -116,7 +116,7 @@ export const usersQueries = {
     };
   },
 
-  getStoreDetails: async (_: unknown, __: unknown, context: Context) => {
+  getUserStoreDetails: async (_: unknown, __: unknown, context: Context) => {
     if (!context.user) {
       throw new GraphQLError(context.authError || "Authentication required", {
         extensions: { code: "UNAUTHENTICATED" },

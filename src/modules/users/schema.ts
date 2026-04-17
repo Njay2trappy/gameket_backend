@@ -41,7 +41,7 @@ export const usersTypeDefs = `#graphql
 
   extend type Query {
     getUserDetails: UserDetailsResponse!
-    getStoreDetails: GetStoreDetailsResponse!
+    getUserStoreDetails: GetStoreDetailsResponse!
     getPremium: GetPremiumResponse!
   }
 

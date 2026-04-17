@@ -73,12 +73,13 @@ export const walletsTypeDefs = `#graphql
     success: Boolean!
     message: String!
     user: User
+    transaction: TransactionDetails
     transactions: TransactionConnection
   }
 
   extend type Query {
     getUserWallets: GetUserWalletsResponse!
-    getUserTransactions(first: Int, after: String, last: Int, before: String): GetUserTransactionsResponse!
+    getUserTransactions(id: ID, first: Int, after: String, last: Int, before: String): GetUserTransactionsResponse!
   }
 
   input AddWalletOptionInput {

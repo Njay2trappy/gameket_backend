@@ -51,7 +51,7 @@ export const walletsQueries = {
 
   getUserTransactions: async (
     _: unknown,
-    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    { id, first, after, last, before }: { id?: string; first?: number; after?: string; last?: number; before?: string },
     context: Context
   ) => {
     if (!context.user) {
@@ -65,6 +65,29 @@ export const walletsQueries = {
     const walletsDB = getWalletsDB();
 
     const user = await db.collection<User>("users").findOne({ id: userId });
+
+    // Single transaction lookup
+    if (id) {
+      const txn = await walletsDB.collection<Transaction>("Transactions").findOne({ id, userId });
+      if (!txn) {
+        return { code: 404, success: false, message: "Transaction not found", transaction: null, transactions: null };
+      }
+      return {
+        code: 200,
+        success: true,
+        message: "Transaction retrieved successfully",
+        user,
+        transaction: {
+          id: txn.id,
+          type: txn.type,
+          status: txn.status,
+          method: txn.method,
+          amount: txn.amount,
+          createdAt: txn.createdAt,
+        },
+        transactions: null,
+      };
+    }
 
     const allTransactions = await walletsDB
       .collection<Transaction>("Transactions")

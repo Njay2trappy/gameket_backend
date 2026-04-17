@@ -56,6 +56,7 @@ export const catalogsTypeDefs = `#graphql
     success: Boolean!
     message: String!
     user: User
+    product: ProductDetails
     products: ProductConnection
   }
 
@@ -107,13 +108,108 @@ export const catalogsTypeDefs = `#graphql
     totalPromotedInCategory: Int
   }
 
+  type PromotedProductEdge {
+    cursor: String!
+    node: PromotedProductDetails!
+  }
+
+  type PromotedProductConnection {
+    edges: [PromotedProductEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type GetPromotedProductsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    products: PromotedProductConnection
+  }
+
+  type PromotedStoreEdge {
+    cursor: String!
+    node: PromotedStoreDetails!
+  }
+
+  type PromotedStoreConnection {
+    edges: [PromotedStoreEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type GetPromotedStoresResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    stores: PromotedStoreConnection
+  }
+
+  type GetProductsProductDetails {
+    productId: ID!
+    catalog: String!
+    category: String!
+    region: String!
+    name: String!
+    description: String!
+    marketPrice: Float!
+    price: Float!
+    discount: Float!
+    isActive: Boolean!
+    isPromoted: Boolean!
+    available: Int!
+    sold: Int!
+    createdAt: String!
+    store: StoreDetails
+  }
+
+  type GetProductsEdge {
+    cursor: String!
+    node: GetProductsProductDetails!
+  }
+
+  type GetProductsConnection {
+    edges: [GetProductsEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type GetProductsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    products: GetProductsConnection
+  }
+
+  type GetProductDetailsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    product: GetProductsProductDetails
+  }
+
+  type GetStoreDetailsPublicResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    store: StoreDetails
+    products: ProductConnection
+  }
+
   extend type Query {
     fetchCatalog(name: String!, category: String, first: Int, after: String, last: Int, before: String): FetchCatalogResponse!
-    getUserProducts(first: Int, after: String, last: Int, before: String): GetUserProductsResponse!
+    getUserProducts(productId: ID, first: Int, after: String, last: Int, before: String): GetUserProductsResponse!
     getUserAdvertisableProducts(first: Int, after: String, last: Int, before: String): GetUserAdvertisableProductsResponse!
     viewProductCodes(productId: ID!, first: Int, after: String, last: Int, before: String): ViewProductCodesResponse!
     checkProductADPosition(productId: ID!, amount: Float!): CheckProductADPositionResponse!
     checkStoreADPosition(amount: Float!): CheckStoreADPositionResponse!
+    getPromotedProducts(first: Int, after: String, last: Int, before: String): GetPromotedProductsResponse!
+    getPromotedStores(first: Int, after: String, last: Int, before: String): GetPromotedStoresResponse!
+    getProducts(category: String!, region: String, min: Float, max: Float, sort: ProductSort, first: Int, after: String, last: Int, before: String): GetProductsResponse!
+    getProductDetails(productId: ID!): GetProductDetailsResponse!
+    getStoreDetails(storeId: ID!, first: Int, after: String, last: Int, before: String): GetStoreDetailsPublicResponse!
+  }
+
+  enum ProductSort {
+    LOW_HIGH
+    RANK
+    QUANTITY_SOLD
   }
 
   type ProductDetails {
@@ -213,6 +309,7 @@ export const catalogsTypeDefs = `#graphql
     campaignEnd: Date!
     createdAt: String!
     product: ProductDetails!
+    store: StoreDetails
   }
 
   type AdvertiseProductResponse {
@@ -259,6 +356,7 @@ export const catalogsTypeDefs = `#graphql
     addProduct(input: AddProductInput!): AddProductResponse!
     updateProduct(input: UpdateProductInput!): UpdateProductResponse!
     deleteProduct(productId: ID!): DeleteProductResponse!
+    disableProduct(productId: ID!): DeleteProductResponse!
     addProductCodes(input: AddProductCodesInput!): AddProductCodesResponse!
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!

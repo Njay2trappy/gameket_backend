@@ -45,7 +45,7 @@ function decodeCursor(cursor: string): number {
 export const catalogsQueries = {
   getUserProducts: async (
     _: unknown,
-    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    { productId, first, after, last, before }: { productId?: string; first?: number; after?: string; last?: number; before?: string },
     context: Context
   ) => {
     if (!context.user) {
@@ -60,16 +60,47 @@ export const catalogsQueries = {
 
     const user = await db.collection<User>("users").findOne({ id: userId });
     if (!user || !user.isStore) {
-      return { code: 403, success: false, message: "Only sellers can view their products", products: null };
+      return { code: 403, success: false, message: "Only sellers can view their products", product: null, products: null };
     }
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
     if (!store) {
-      return { code: 403, success: false, message: "You must have a store to view products", products: null };
+      return { code: 403, success: false, message: "You must have a store to view products", product: null, products: null };
     }
 
     if (!store.isActive) {
-      return { code: 403, success: false, message: "Your store is not active", products: null };
+      return { code: 403, success: false, message: "Your store is not active", product: null, products: null };
+    }
+
+    // Single product lookup
+    if (productId) {
+      const p = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+      if (!p) {
+        return { code: 404, success: false, message: "Product not found or does not belong to you", product: null, products: null };
+      }
+      return {
+        code: 200,
+        success: true,
+        message: "Product retrieved successfully",
+        user,
+        product: {
+          productId: p.productId,
+          catalog: p.catalog,
+          category: p.category,
+          region: p.region,
+          name: p.name,
+          description: p.description,
+          marketPrice: p.marketPrice,
+          price: p.price,
+          discount: p.discount,
+          isActive: p.isActive,
+          isPromoted: p.isPromoted,
+          available: p.available,
+          sold: p.sold,
+          createdAt: p.createdAt,
+        },
+        products: null,
+      };
     }
 
     const allProducts = await catalogsDB.collection<Product>("Products").find({ userId }).toArray();
@@ -513,6 +544,509 @@ export const catalogsQueries = {
       item: null,
     };
   },
+
+  getPromotedProducts: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string }
+  ) => {
+    const catalogsDB = getCatalogsDB();
+    const now = new Date().toISOString();
+
+    const activePromotions = await catalogsDB
+      .collection<PromotedProduct>("PromotedProducts")
+      .find({ campaignEnd: { $gte: now } })
+      .sort({ amount: -1 })
+      .toArray();
+
+    if (!activePromotions.length) {
+      return {
+        code: 200,
+        success: true,
+        message: "No promoted products found",
+        products: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    const productIds = activePromotions.map((p) => p.productId);
+    const products = await catalogsDB
+      .collection<Product>("Products")
+      .find({ productId: { $in: productIds }, isActive: true })
+      .toArray();
+
+    const productMap = new Map(products.map((p) => [p.productId, p]));
+
+    const storeUserIds = [...new Set(activePromotions.map((p) => p.userId))];
+    const stores = await catalogsDB
+      .collection<Store>("Stores")
+      .find({ userId: { $in: storeUserIds } })
+      .toArray();
+    const storeMap = new Map(stores.map((s) => [s.userId, s]));
+
+    const allPromotedProducts = activePromotions
+      .filter((promo) => productMap.has(promo.productId))
+      .map((promo) => {
+        const p = productMap.get(promo.productId)!;
+        const s = storeMap.get(promo.userId);
+        return {
+          productId: promo.productId,
+          amount: promo.amount,
+          campaignStart: promo.campaignStart,
+          campaignEnd: promo.campaignEnd,
+          createdAt: promo.createdAt,
+          product: {
+            productId: p.productId,
+            catalog: p.catalog,
+            category: p.category,
+            region: p.region,
+            name: p.name,
+            description: p.description,
+            marketPrice: p.marketPrice,
+            price: p.price,
+            discount: p.discount,
+            isActive: p.isActive,
+            isPromoted: p.isPromoted,
+            available: p.available,
+            sold: p.sold,
+            createdAt: p.createdAt,
+          },
+          store: s
+            ? {
+                storeId: s.storeId,
+                storeName: s.storeName,
+                isActive: s.isActive,
+                isPromoted: s.isPromoted,
+                type: s.type,
+                totalSales: s.totalSales,
+                positiveReviews: s.positiveReviews,
+                negativeReviews: s.negativeReviews,
+              }
+            : null,
+        };
+      });
+
+    const total = allPromotedProducts.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allPromotedProducts.slice(start, end);
+
+    const edges = sliced.map((item, i) => ({
+      cursor: encodeCursor(start + i),
+      node: item,
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} promoted product(s) found`,
+      products: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  getPromotedStores: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string }
+  ) => {
+    const catalogsDB = getCatalogsDB();
+    const now = new Date().toISOString();
+
+    const activePromotions = await catalogsDB
+      .collection<PromotedStore>("PromotedStores")
+      .find({ campaignEnd: { $gte: now } })
+      .sort({ amount: -1 })
+      .toArray();
+
+    if (!activePromotions.length) {
+      return {
+        code: 200,
+        success: true,
+        message: "No promoted stores found",
+        stores: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    const storeIds = activePromotions.map((p) => p.storeId);
+    const stores = await catalogsDB
+      .collection<Store>("Stores")
+      .find({ storeId: { $in: storeIds }, isActive: true })
+      .toArray();
+
+    const storeMap = new Map(stores.map((s) => [s.storeId, s]));
+
+    const allPromotedStores = activePromotions
+      .filter((promo) => storeMap.has(promo.storeId))
+      .map((promo) => {
+        const s = storeMap.get(promo.storeId)!;
+        return {
+          storeId: promo.storeId,
+          amount: promo.amount,
+          campaignStart: promo.campaignStart,
+          campaignEnd: promo.campaignEnd,
+          createdAt: promo.createdAt,
+          store: {
+            storeId: s.storeId,
+            storeName: s.storeName,
+            isActive: s.isActive,
+            isPromoted: s.isPromoted,
+            type: s.type,
+            totalSales: s.totalSales,
+            positiveReviews: s.positiveReviews,
+            negativeReviews: s.negativeReviews,
+          },
+        };
+      });
+
+    const total = allPromotedStores.length;
+    const defaultPageSize = 10;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allPromotedStores.slice(start, end);
+
+    const edges = sliced.map((item, i) => ({
+      cursor: encodeCursor(start + i),
+      node: item,
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} promoted store(s) found`,
+      stores: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  getProducts: async (
+    _: unknown,
+    { category, region, min, max, sort, first, after, last, before }: {
+      category: string; region?: string; min?: number; max?: number; sort?: string;
+      first?: number; after?: string; last?: number; before?: string;
+    }
+  ) => {
+    const catalogsDB = getCatalogsDB();
+    const now = new Date().toISOString();
+
+    // Get active promotions for this category
+    const activePromotions = await catalogsDB
+      .collection<PromotedProduct>("PromotedProducts")
+      .find({ campaignEnd: { $gte: now } })
+      .sort({ amount: -1 })
+      .toArray();
+
+    const promotedProductIds = new Set(activePromotions.map((p) => p.productId));
+
+    // Build filter query
+    const filter: Record<string, unknown> = { category, isActive: true };
+    if (region) filter.region = region;
+    if (min != null || max != null) {
+      filter.price = {} as Record<string, number>;
+      if (min != null) (filter.price as Record<string, number>).$gte = min;
+      if (max != null) (filter.price as Record<string, number>).$lte = max;
+    }
+
+    // Get all active products in the category
+    const allCategoryProducts = await catalogsDB
+      .collection<Product>("Products")
+      .find(filter)
+      .toArray();
+
+    if (!allCategoryProducts.length) {
+      return {
+        code: 200,
+        success: true,
+        message: "No products found in this category",
+        products: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    // Split into promoted and non-promoted
+    const promoted = allCategoryProducts.filter((p) => promotedProductIds.has(p.productId));
+    const nonPromoted = allCategoryProducts.filter((p) => !promotedProductIds.has(p.productId));
+
+    // Sort promoted by ad spend descending
+    const promoAmountMap = new Map(activePromotions.map((p) => [p.productId, p.amount]));
+    promoted.sort((a, b) => (promoAmountMap.get(b.productId) || 0) - (promoAmountMap.get(a.productId) || 0));
+
+    // Sort non-promoted by sold descending, then createdAt descending
+    nonPromoted.sort((a, b) => {
+      if (b.sold !== a.sold) return b.sold - a.sold;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    // Fetch store details for all products
+    const storeUserIds = [...new Set(allCategoryProducts.map((p) => p.userId))];
+    const stores = await catalogsDB
+      .collection<Store>("Stores")
+      .find({ userId: { $in: storeUserIds } })
+      .toArray();
+    const storeMap = new Map(stores.map((s) => [s.userId, s]));
+
+    const mapProduct = (p: Product) => {
+      const s = storeMap.get(p.userId);
+      return {
+        productId: p.productId,
+        catalog: p.catalog,
+        category: p.category,
+        region: p.region,
+        name: p.name,
+        description: p.description,
+        marketPrice: p.marketPrice,
+        price: p.price,
+        discount: p.discount,
+        isActive: p.isActive,
+        isPromoted: p.isPromoted,
+        available: p.available,
+        sold: p.sold,
+        createdAt: p.createdAt,
+        store: s
+          ? {
+              storeId: s.storeId,
+              storeName: s.storeName,
+              isActive: s.isActive,
+              isPromoted: s.isPromoted,
+              type: s.type,
+              totalSales: s.totalSales,
+              positiveReviews: s.positiveReviews,
+              negativeReviews: s.negativeReviews,
+            }
+          : null,
+      };
+    };
+
+    // Promoted first, then non-promoted
+    let merged = [...promoted.map(mapProduct), ...nonPromoted.map(mapProduct)];
+
+    // Apply sort override if specified
+    if (sort === "LOW_HIGH") {
+      merged.sort((a, b) => a.price - b.price);
+    } else if (sort === "RANK") {
+      merged.sort((a, b) => (b.store?.totalSales ?? 0) - (a.store?.totalSales ?? 0));
+    } else if (sort === "QUANTITY_SOLD") {
+      merged.sort((a, b) => b.sold - a.sold);
+    }
+
+    const total = merged.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = merged.slice(start, end);
+
+    const edges = sliced.map((item, i) => ({
+      cursor: encodeCursor(start + i),
+      node: item,
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} product(s) found`,
+      products: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  getProductDetails: async (
+    _: unknown,
+    { productId }: { productId: string }
+  ) => {
+    const catalogsDB = getCatalogsDB();
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found", product: null };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId: product.userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Product retrieved successfully",
+      product: {
+        productId: product.productId,
+        catalog: product.catalog,
+        category: product.category,
+        region: product.region,
+        name: product.name,
+        description: product.description,
+        marketPrice: product.marketPrice,
+        price: product.price,
+        discount: product.discount,
+        isActive: product.isActive,
+        isPromoted: product.isPromoted,
+        available: product.available,
+        sold: product.sold,
+        createdAt: product.createdAt,
+        store: store
+          ? {
+              storeId: store.storeId,
+              storeName: store.storeName,
+              isActive: store.isActive,
+              isPromoted: store.isPromoted,
+              type: store.type,
+              totalSales: store.totalSales,
+              positiveReviews: store.positiveReviews,
+              negativeReviews: store.negativeReviews,
+            }
+          : null,
+      },
+    };
+  },
+
+  getStoreDetails: async (
+    _: unknown,
+    { storeId, first, after, last, before }: { storeId: string; first?: number; after?: string; last?: number; before?: string }
+  ) => {
+    const catalogsDB = getCatalogsDB();
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", store: null, products: null };
+    }
+
+    const allProducts = await catalogsDB
+      .collection<Product>("Products")
+      .find({ userId: store.userId, isActive: true })
+      .sort({ sold: -1, createdAt: -1 })
+      .toArray();
+
+    const total = allProducts.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allProducts.slice(start, end);
+
+    const edges = sliced.map((p, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        productId: p.productId,
+        catalog: p.catalog,
+        category: p.category,
+        region: p.region,
+        name: p.name,
+        description: p.description,
+        marketPrice: p.marketPrice,
+        price: p.price,
+        discount: p.discount,
+        isActive: p.isActive,
+        isPromoted: p.isPromoted,
+        available: p.available,
+        sold: p.sold,
+        createdAt: p.createdAt,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: "Store retrieved successfully",
+      store: {
+        storeId: store.storeId,
+        storeName: store.storeName,
+        isActive: store.isActive,
+        isPromoted: store.isPromoted,
+        type: store.type,
+        totalSales: store.totalSales,
+        positiveReviews: store.positiveReviews,
+        negativeReviews: store.negativeReviews,
+      },
+      products: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
 };
 
 export const catalogsMutations = {
@@ -905,6 +1439,48 @@ export const catalogsMutations = {
       code: 200,
       success: true,
       message: "Product deleted successfully",
+      user,
+    };
+  },
+
+  disableProduct: async (
+    _: unknown,
+    { productId }: { productId: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can disable products" };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you" };
+    }
+
+    if (!product.isActive) {
+      return { code: 409, success: false, message: "Product is already disabled" };
+    }
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      { $set: { isActive: false } }
+    );
+
+    return {
+      code: 200,
+      success: true,
+      message: "Product disabled successfully",
       user,
     };
   },
