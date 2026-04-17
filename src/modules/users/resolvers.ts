@@ -25,7 +25,7 @@ export const userFieldResolvers = {
       totalSales: storeDoc.totalSales,
       positiveReviews: storeDoc.positiveReviews,
       negativeReviews: storeDoc.negativeReviews,
-      registered: storeDoc.createdAt,
+      registered: storeDoc.createdAt?.split("T")[0] || storeDoc.createdAt,
     };
   },
   wallet: async (parent: Record<string, unknown>) => {
@@ -151,7 +151,7 @@ export const usersQueries = {
         totalSales: storeDoc.totalSales,
         positiveReviews: storeDoc.positiveReviews,
         negativeReviews: storeDoc.negativeReviews,
-        registered: storeDoc.createdAt,
+        registered: storeDoc.createdAt?.split("T")[0] || storeDoc.createdAt,
       },
     };
   },

@@ -86,7 +86,7 @@ export const authMutations = {
     }
 
     const userId = uuidv4();
-    const registered = new Date().toISOString();
+    const registered = new Date().toISOString().split("T")[0];
     const hashedPassword = await bcrypt.hash(password, 12);
 
     const user: User = {
@@ -314,7 +314,7 @@ export const authMutations = {
     }
 
     const userId = uuidv4();
-    const registered = new Date().toISOString();
+    const registered = new Date().toISOString().split("T")[0];
 
     const user: User = {
       id: userId,

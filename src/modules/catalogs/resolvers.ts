@@ -622,7 +622,7 @@ export const catalogsQueries = {
               totalSales: s.totalSales,
               positiveReviews: s.positiveReviews,
               negativeReviews: s.negativeReviews,
-              registered: s.createdAt,
+              registered: s.createdAt?.split("T")[0] || s.createdAt,
             }
           : null,
       };
@@ -725,7 +725,7 @@ export const catalogsQueries = {
       totalSales: s.totalSales,
       positiveReviews: s.positiveReviews,
       negativeReviews: s.negativeReviews,
-      registered: s.createdAt,
+      registered: s.createdAt?.split("T")[0] || s.createdAt,
     });
 
     // Promoted first, then non-promoted
@@ -866,7 +866,7 @@ export const catalogsQueries = {
               totalSales: s.totalSales,
               positiveReviews: s.positiveReviews,
               negativeReviews: s.negativeReviews,
-              registered: s.createdAt,
+              registered: s.createdAt?.split("T")[0] || s.createdAt,
             }
           : null,
       };
@@ -969,7 +969,7 @@ export const catalogsQueries = {
               totalSales: store.totalSales,
               positiveReviews: store.positiveReviews,
               negativeReviews: store.negativeReviews,
-              registered: store.createdAt,
+              registered: store.createdAt?.split("T")[0] || store.createdAt,
             }
           : null,
       },
@@ -1046,7 +1046,7 @@ export const catalogsQueries = {
         totalSales: store.totalSales,
         positiveReviews: store.positiveReviews,
         negativeReviews: store.negativeReviews,
-        registered: store.createdAt,
+        registered: store.createdAt?.split("T")[0] || store.createdAt,
       },
       products: {
         edges,
@@ -1105,7 +1105,7 @@ export const catalogsQueries = {
         totalSales: s.totalSales,
         positiveReviews: s.positiveReviews,
         negativeReviews: s.negativeReviews,
-        registered: s.createdAt,
+        registered: s.createdAt?.split("T")[0] || s.createdAt,
       },
     }));
 
@@ -1804,7 +1804,7 @@ export const catalogsMutations = {
           totalSales: store.totalSales,
           positiveReviews: store.positiveReviews,
           negativeReviews: store.negativeReviews,
-          registered: store.createdAt,
+          registered: store.createdAt?.split("T")[0] || store.createdAt,
         },
       },
     };

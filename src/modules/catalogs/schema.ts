@@ -8,7 +8,7 @@ export const catalogsTypeDefs = `#graphql
     totalSales: Int!
     positiveReviews: Int!
     negativeReviews: Int!
-    registered: Date!
+    registered: String!
   }
 
   type CategoryNode {
