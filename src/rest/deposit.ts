@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getDB, getWalletsDB } from "../db.js";
 import type { Deposit, Transaction, Balance } from "../types.js";
+import bcrypt from "bcryptjs";
 
 const router = Router();
 
@@ -16,8 +17,14 @@ router.post("/webhook/deposit", async (req, res) => {
   const walletsDB = getWalletsDB();
 
   // Verify private key against Auth collection
-  const authRecord = await db.collection("Auth").findOne({ privateKey });
+  const authRecord = await db.collection("Auth").findOne({ key: "privateKey" });
   if (!authRecord) {
+    res.status(401).json({ success: false, message: "Unauthorized" });
+    return;
+  }
+
+  const isValid = await bcrypt.compare(privateKey, authRecord.value);
+  if (!isValid) {
     res.status(401).json({ success: false, message: "Unauthorized" });
     return;
   }
