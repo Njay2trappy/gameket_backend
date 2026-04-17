@@ -170,6 +170,10 @@ export const authMutations = {
       return { code: 401, success: false, message: "Invalid email or password", token: null, user: null };
     }
 
+    if (account.authProvider === "google") {
+      return { code: 400, success: false, message: "This email is registered with Google. Please sign in with Google.", token: null, user: null };
+    }
+
     const valid = await bcrypt.compare(password, account.password || "");
     if (!valid) {
       return { code: 401, success: false, message: "Invalid email or password", token: null, user: null };
@@ -233,6 +237,10 @@ export const authMutations = {
     // Check if user already exists
     const existingAccount = await accounts.findOne({ email });
     if (existingAccount) {
+      if (existingAccount.authProvider !== "google") {
+        return { code: 400, success: false, message: "This email is registered with email/password. Please login with your password.", token: null, user: null };
+      }
+
       const user = await users.findOne({ id: existingAccount.userId });
       if (!user) {
         return { code: 401, success: false, message: "Account not found", token: null, user: null };
