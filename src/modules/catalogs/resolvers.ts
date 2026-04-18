@@ -1711,6 +1711,23 @@ export const catalogsMutations = {
       success: true,
       message: "Product disabled successfully",
       user,
+      product: {
+        productId: product.productId,
+        catalog: product.catalog,
+        category: product.category,
+        region: product.region,
+        name: product.name,
+        description: product.description,
+        marketPrice: product.marketPrice,
+        price: product.price,
+        discount: product.discount,
+        isActive: false,
+        isPromoted: product.isPromoted,
+        available: product.available,
+        sold: product.sold,
+        type: product.type,
+        createdAt: product.createdAt,
+      },
     };
   },
 

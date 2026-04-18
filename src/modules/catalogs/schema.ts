@@ -330,6 +330,7 @@ export const catalogsTypeDefs = `#graphql
     success: Boolean!
     message: String!
     user: User
+    product: ProductDetails
   }
 
   input AdvertiseProductInput {
