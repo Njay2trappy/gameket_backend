@@ -1731,6 +1731,65 @@ export const catalogsMutations = {
     };
   },
 
+  enableProduct: async (
+    _: unknown,
+    { productId }: { productId: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can enable products" };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you" };
+    }
+
+    if (product.isActive) {
+      return { code: 409, success: false, message: "Product is already enabled" };
+    }
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      { $set: { isActive: true } }
+    );
+
+    return {
+      code: 200,
+      success: true,
+      message: "Product enabled successfully",
+      user,
+      product: {
+        productId: product.productId,
+        catalog: product.catalog,
+        category: product.category,
+        region: product.region,
+        name: product.name,
+        description: product.description,
+        marketPrice: product.marketPrice,
+        price: product.price,
+        discount: product.discount,
+        isActive: true,
+        isPromoted: product.isPromoted,
+        available: product.available,
+        sold: product.sold,
+        type: product.type,
+        createdAt: product.createdAt,
+      },
+    };
+  },
+
   advertiseProduct: async (
     _: unknown,
     { input }: { input: { productId: string; amount: number; campaignStart: string; campaignEnd: string } },

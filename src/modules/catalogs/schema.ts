@@ -448,6 +448,7 @@ export const catalogsTypeDefs = `#graphql
     updateProduct(input: UpdateProductInput!): UpdateProductResponse!
     deleteProduct(productId: ID!): DeleteProductResponse!
     disableProduct(productId: ID!): DeleteProductResponse!
+    enableProduct(productId: ID!): DeleteProductResponse!
     addProductCodes(input: AddProductCodesInput!): AddProductCodesResponse!
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!
