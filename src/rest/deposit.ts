@@ -96,7 +96,7 @@ router.post("/webhook/deposit", async (req, res) => {
       const catalogsDB = getCatalogsDB();
       const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
 
-      if (!product || product.availableCodes.length < order.codes.length) {
+      if (!product || product.availableCodes.length < order.quantity) {
         await walletsDB.collection<Deposit>("Deposits").updateOne(
           { payId: txnid },
           { $set: { status: "failed" } }
@@ -109,7 +109,7 @@ router.post("/webhook/deposit", async (req, res) => {
         return;
       }
 
-      const quantity = order.codes.length;
+      const quantity = order.quantity;
       const purchasedCodes = product.availableCodes.slice(0, quantity);
       const remainingCodes = product.availableCodes.slice(quantity);
       const now = new Date().toISOString();

@@ -216,7 +216,7 @@ export const walletsQueries = {
             requestCount: store.requestCount,
           } : null,
         } : null,
-        codes: order.codes.map(decrypt),
+        codes: order.status === "completed" ? order.codes.map(decrypt) : [],
         amount: order.amount,
         fee: order.fee,
         totalAmount: order.totalAmount,
@@ -839,6 +839,7 @@ export const walletsMutations = {
       buyerTransactionId: transactionId,
       sellerTransactionId,
       codes: purchasedCodes,
+      quantity,
       amount,
       fee,
       totalAmount,
@@ -1015,8 +1016,6 @@ export const walletsMutations = {
     const payId = String(paymentResponse.transaction?.txnid || "");
     const paymentLink = String(paymentResponse.paymentLink || "");
 
-    const purchasedCodes = product.availableCodes.slice(0, quantity);
-
     // Create order
     const orderId = randomBytes(36).toString("base64").replace(/[+/=]/g, "");
 
@@ -1028,7 +1027,8 @@ export const walletsMutations = {
       productId,
       buyerTransactionId: "",
       sellerTransactionId: "",
-      codes: purchasedCodes,
+      codes: [],
+      quantity,
       amount,
       fee,
       totalAmount,

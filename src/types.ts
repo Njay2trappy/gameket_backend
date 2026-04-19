@@ -159,6 +159,7 @@ export interface Order {
   buyerTransactionId: string;
   sellerTransactionId: string;
   codes: string[];
+  quantity: number;
   amount: number;
   fee: number;
   totalAmount: number;
