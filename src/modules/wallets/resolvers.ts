@@ -993,21 +993,81 @@ export const walletsQueries = {
 
     const sliced = allDisputes.slice(start, end);
 
-    const edges = sliced.map((d, i) => ({
-      cursor: encodeCursor(start + i),
-      node: {
-        disputeId: d.disputeId,
-        orderId: d.orderId,
-        buyerId: d.buyerId,
-        sellerId: d.sellerId,
-        storeId: d.storeId,
-        reason: d.reason,
-        status: d.status,
-        messages: buildMessagesConnection(d.messages || []),
-        createdAt: d.createdAt,
-        order: null,
-      },
-    }));
+    // Batch fetch orders for the disputes
+    const orderIds = [...new Set(sliced.map((d) => d.orderId))];
+    const orders = await walletsDB.collection<Order>("Orders").find({ orderId: { $in: orderIds } }).toArray();
+    const orderMap = new Map(orders.map((o) => [o.orderId, o]));
+
+    // Batch fetch stores
+    const catalogsDB = getCatalogsDB();
+    const storeIds = [...new Set(sliced.map((d) => d.storeId))];
+    const stores = await catalogsDB.collection<Store>("Stores").find({ storeId: { $in: storeIds } }).toArray();
+    const storeMap = new Map(stores.map((s) => [s.storeId, s]));
+
+    // Batch fetch users (buyers and sellers)
+    const userIds = [...new Set(sliced.flatMap((d) => [d.buyerId, d.sellerId]))];
+    const users = await db.collection<User>("users").find({ id: { $in: userIds } }).toArray();
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const edges = sliced.map((d, i) => {
+      const order = orderMap.get(d.orderId);
+      const store = storeMap.get(d.storeId);
+      const buyer = userMap.get(d.buyerId);
+      const seller = userMap.get(d.sellerId);
+
+      return {
+        cursor: encodeCursor(start + i),
+        node: {
+          disputeId: d.disputeId,
+          orderId: d.orderId,
+          buyerId: d.buyerId,
+          sellerId: d.sellerId,
+          storeId: d.storeId,
+          reason: d.reason,
+          status: d.status,
+          messages: buildMessagesConnection(d.messages || []),
+          createdAt: d.createdAt,
+          order: order ? {
+            orderId: order.orderId,
+            buyerId: order.buyerId,
+            buyerName: order.buyerName || buyer?.username || "",
+            sellerId: order.sellerId,
+            sellerName: seller?.username || "",
+            storeId: order.storeId,
+            product: null,
+            codes: [],
+            amount: order.amount,
+            fee: order.fee,
+            totalAmount: order.totalAmount,
+            status: order.status,
+            type: order.type,
+            action: d.buyerId === userId ? "buy" : "sell",
+            isReviewed: order.isReviewed,
+            isReleased: order.isReleased,
+            reviewType: order.reviewType ?? null,
+            disputeReason: order.disputeReason ?? null,
+            createdAt: order.createdAt,
+            releasedAt: order.releasedAt,
+            store: store ? {
+              storeId: store.storeId,
+              storeName: store.storeName,
+              isActive: store.isActive,
+              isApproved: store.isApproved,
+              approveStatus: store.approveStatus,
+              isPromoted: store.isPromoted,
+              type: store.type,
+              totalSales: store.totalSales,
+              positiveReviews: store.positiveReviews,
+              negativeReviews: store.negativeReviews,
+              registered: store.createdAt,
+              requestCount: store.requestCount,
+            } : null,
+            transaction: null,
+            refundOffer: null,
+          } : null,
+        },
+      };
+    });
 
     return {
       code: 200,
