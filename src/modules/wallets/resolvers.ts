@@ -1479,7 +1479,7 @@ export const walletsMutations = {
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
-    const fee = parseFloat((amount * 0.005).toFixed(2));
+    const fee = parseFloat(Math.max(amount * 0.005, 0.1).toFixed(2));
     const totalAmount = parseFloat((amount + fee).toFixed(2));
 
     // Check buyer balance
