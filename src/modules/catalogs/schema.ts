@@ -263,6 +263,7 @@ export const catalogsTypeDefs = `#graphql
     getStoreDetails(storeId: ID!, first: Int, after: String, last: Int, before: String): GetStoreDetailsPublicResponse!
     getStores(first: Int, after: String, last: Int, before: String): GetStoresResponse!
     getVerificationRequest(storeId: ID!, superkey: String!): GetVerificationRequestResponse!
+    getStoreBlacklist(first: Int, after: String, last: Int, before: String): GetStoreBlacklistResponse!
   }
 
   enum ProductSort {
@@ -467,6 +468,47 @@ export const catalogsTypeDefs = `#graphql
     deleteUrl: String
   }
 
+  type BlacklistResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+  }
+
+  type BlacklistEntry {
+    userId: String!
+    username: String!
+    avatar: String
+    createdAt: String!
+  }
+
+  type BlacklistEdge {
+    cursor: String!
+    node: BlacklistEntry!
+  }
+
+  type BlacklistConnection {
+    edges: [BlacklistEdge!]!
+    pageInfo: BlacklistPageInfo!
+  }
+
+  type BlacklistPageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
+    fetchedCount: Int!
+    remainingCount: Int!
+  }
+
+  type GetStoreBlacklistResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    blacklist: BlacklistConnection
+  }
+
   extend type Mutation {
     addProduct(input: AddProductInput!): AddProductResponse!
     updateProduct(input: UpdateProductInput!): UpdateProductResponse!
@@ -481,5 +523,7 @@ export const catalogsTypeDefs = `#graphql
     adminAuthorizeStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
     adminRejectStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
     uploadImage(image: String!): UploadImageResponse!
+    blacklistUser(userId: ID!): BlacklistResponse!
+    delistUser(userId: ID!): BlacklistResponse!
   }
 `;

@@ -1,7 +1,7 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer } from "../../types.js";
+import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist } from "../../types.js";
 import type { Context } from "../../index.js";
 
 function getRankFromSales(totalSales: number): number {
@@ -1566,6 +1566,12 @@ export const walletsMutations = {
     // Prevent buying own product
     if (product.userId === userId) {
       return { code: 403, success: false, message: "You cannot purchase your own product", order: null, transaction: null };
+    }
+
+    // Check if buyer is blacklisted by the store
+    const isBlacklisted = await catalogsDB.collection<Blacklist>("Blacklists").findOne({ storeId: product.storeId, userId });
+    if (isBlacklisted) {
+      return { code: 403, success: false, message: "You are blocked from purchasing from this store", order: null, transaction: null };
     }
 
     // Check enough codes available

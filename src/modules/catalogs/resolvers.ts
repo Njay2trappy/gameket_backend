@@ -3,7 +3,7 @@ import { allGroups } from "../../../data/categories/index.js";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
-import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction, VerificationRequest, Order, Review } from "../../types.js";
+import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction, VerificationRequest, Order, Review, Blacklist } from "../../types.js";
 import type { Context } from "../../index.js";
 import countryData from "../../../data/country.json";
 import bcrypt from "bcryptjs";
@@ -1309,6 +1309,106 @@ export const catalogsQueries = {
       },
     };
   },
+
+  getStoreBlacklist: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) throw new GraphQLError("User not found");
+
+    if (!user.isStore) {
+      return { code: 403, success: false, message: "Only store owners can view their blacklist", user: null, blacklist: null };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", user, blacklist: null };
+    }
+
+    const allEntries = await catalogsDB
+      .collection<Blacklist>("Blacklists")
+      .find({ storeId: store.storeId })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allEntries.length;
+    if (total === 0) {
+      return {
+        code: 200,
+        success: true,
+        message: "0 blacklisted user(s)",
+        user,
+        blacklist: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allEntries.slice(start, end);
+
+    // Batch fetch blacklisted users
+    const blacklistedUserIds = [...new Set(sliced.map((b) => b.userId))];
+    const blacklistedUsers = await db.collection<User>("users").find({ id: { $in: blacklistedUserIds } }).toArray();
+    const blacklistedUserMap = new Map(blacklistedUsers.map((u) => [u.id, u]));
+
+    const edges = sliced.map((entry, i) => {
+      const blockedUser = blacklistedUserMap.get(entry.userId);
+      return {
+        cursor: encodeCursor(start + i),
+        node: {
+          userId: entry.userId,
+          username: blockedUser?.username || "",
+          avatar: blockedUser?.avatar || null,
+          createdAt: entry.createdAt,
+        },
+      };
+    });
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} blacklisted user(s)`,
+      user,
+      blacklist: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
 };
 
 export const catalogsMutations = {
@@ -2386,5 +2486,88 @@ export const catalogsMutations = {
     } catch (error) {
       return { code: 500, success: false, message: "Image upload failed", url: null, deleteUrl: null };
     }
+  },
+
+  blacklistUser: async (_: unknown, { userId: targetUserId }: { userId: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null };
+    }
+
+    if (!user.isStore) {
+      return { code: 403, success: false, message: "Only store owners can blacklist users", user };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", user };
+    }
+
+    if (targetUserId === userId) {
+      return { code: 400, success: false, message: "You cannot blacklist yourself", user };
+    }
+
+    const targetUser = await db.collection<User>("users").findOne({ id: targetUserId });
+    if (!targetUser) {
+      return { code: 404, success: false, message: "Target user not found", user };
+    }
+
+    const existing = await catalogsDB.collection<Blacklist>("Blacklists").findOne({ storeId: store.storeId, userId: targetUserId });
+    if (existing) {
+      return { code: 409, success: false, message: "This user is already blacklisted", user };
+    }
+
+    const now = new Date().toISOString();
+    await catalogsDB.collection<Blacklist>("Blacklists").insertOne({
+      storeId: store.storeId,
+      userId: targetUserId,
+      blockedBy: userId,
+      createdAt: now,
+    });
+
+    return { code: 200, success: true, message: `${targetUser.username} has been blacklisted from your store`, user };
+  },
+
+  delistUser: async (_: unknown, { userId: targetUserId }: { userId: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null };
+    }
+
+    if (!user.isStore) {
+      return { code: 403, success: false, message: "Only store owners can manage their blacklist", user };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", user };
+    }
+
+    const result = await catalogsDB.collection<Blacklist>("Blacklists").deleteOne({ storeId: store.storeId, userId: targetUserId });
+    if (result.deletedCount === 0) {
+      return { code: 404, success: false, message: "This user is not on your blacklist", user };
+    }
+
+    return { code: 200, success: true, message: "User has been removed from your blacklist", user };
   },
 };

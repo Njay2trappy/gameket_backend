@@ -141,6 +141,13 @@ export interface PromotedStore {
   createdAt: string;
 }
 
+export interface Blacklist {
+  storeId: string;
+  userId: string;
+  blockedBy: string;
+  createdAt: string;
+}
+
 export interface VerificationRequest {
   userId: string;
   storeId: string;
