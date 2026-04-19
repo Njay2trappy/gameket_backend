@@ -33,6 +33,7 @@ export const catalogsTypeDefs = `#graphql
     totalSales: Int!
     positiveReviews: Int!
     negativeReviews: Int!
+    reviews: [ReviewDetails!]
     registered: String!
     requestCount: Int!
   }

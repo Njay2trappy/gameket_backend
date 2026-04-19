@@ -188,6 +188,9 @@ export const walletsTypeDefs = `#graphql
     getUserTransactions(id: ID, first: Int, after: String, last: Int, before: String): GetUserTransactionsResponse!
     getUserOrders(id: ID, first: Int, after: String, last: Int, before: String): GetUserOrdersResponse!
     getOrder(id: ID!): GetOrderResponse!
+    getUserReviews(first: Int, after: String, last: Int, before: String): GetUserReviewsResponse!
+    getStoreReviews(storeId: ID!, category: String!, first: Int, after: String, last: Int, before: String): GetStoreReviewsResponse!
+    getUserStoreReviews(first: Int, after: String, last: Int, before: String): GetUserStoreReviewsResponse!
   }
 
   input AddWalletOptionInput {
@@ -218,7 +221,7 @@ export const walletsTypeDefs = `#graphql
   }
 
   type ReviewDetails {
-    reviewerId: String!
+    reviewerName: String!
     orderId: String!
     type: ReviewType!
     review: String!
@@ -231,6 +234,48 @@ export const walletsTypeDefs = `#graphql
     message: String!
     user: User
     review: ReviewDetails
+  }
+
+  type ReviewEdge {
+    cursor: String!
+    node: ReviewDetails!
+  }
+
+  type ReviewConnection {
+    edges: [ReviewEdge!]!
+    pageInfo: ReviewPageInfo!
+  }
+
+  type ReviewPageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
+    fetchedCount: Int!
+    remainingCount: Int!
+  }
+
+  type GetUserReviewsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    reviews: ReviewConnection
+  }
+
+  type GetStoreReviewsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    reviews: ReviewConnection
+  }
+
+  type GetUserStoreReviewsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    reviews: ReviewConnection
   }
 
   extend type Mutation {

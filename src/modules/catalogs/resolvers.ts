@@ -3,7 +3,7 @@ import { allGroups } from "../../../data/categories/index.js";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
-import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction, VerificationRequest } from "../../types.js";
+import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction, VerificationRequest, Order, Review } from "../../types.js";
 import type { Context } from "../../index.js";
 import countryData from "../../../data/country.json";
 import bcrypt from "bcryptjs";
@@ -923,6 +923,45 @@ export const catalogsQueries = {
       .toArray();
     const storeMap = new Map(stores.map((s) => [s.userId, s]));
 
+    // Resolve store reviews filtered to this category's products
+    const walletsDB = getWalletsDB();
+    const db = getDB();
+    const allReviews = stores.flatMap((s) => (s.reviews ?? []).map((r) => ({ ...r, storeUserId: s.userId })));
+    const storeReviewsMap = new Map<string, { reviewerName: string; orderId: string; type: string; review: string; date: string }[]>();
+
+    if (allReviews.length) {
+      const orderIds = allReviews.map((r) => r.orderId);
+      const orders = await walletsDB.collection<Order>("Orders").find({ orderId: { $in: orderIds } }).toArray();
+      const orderMap = new Map(orders.map((o) => [o.orderId, o]));
+      const categoryProductIds = new Set(allCategoryProducts.map((p) => p.productId));
+
+      const filtered = allReviews.filter((r) => {
+        const order = orderMap.get(r.orderId);
+        return order && categoryProductIds.has(order.productId);
+      });
+
+      const reviewerIds = [...new Set(filtered.map((r) => r.reviewerId))];
+      const reviewers = await db.collection<User>("users").find({ id: { $in: reviewerIds } }).toArray();
+      const reviewerMap = new Map(reviewers.map((u) => [u.id, u.username]));
+
+      for (const r of filtered) {
+        const resolved = {
+          reviewerName: reviewerMap.get(r.reviewerId) ?? "Unknown",
+          orderId: r.orderId,
+          type: r.type,
+          review: r.review,
+          date: r.date,
+        };
+        const existing = storeReviewsMap.get(r.storeUserId) ?? [];
+        existing.push(resolved);
+        storeReviewsMap.set(r.storeUserId, existing);
+      }
+
+      for (const [, revs] of storeReviewsMap) {
+        revs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      }
+    }
+
     const mapProduct = (p: Product) => {
       const s = storeMap.get(p.userId);
       return {
@@ -953,6 +992,7 @@ export const catalogsQueries = {
               totalSales: s.totalSales,
               positiveReviews: s.positiveReviews,
               negativeReviews: s.negativeReviews,
+              reviews: storeReviewsMap.get(s.userId) ?? [],
               registered: s.createdAt?.split("T")[0] || s.createdAt,
               requestCount: s.requestCount ?? 0,
             }
@@ -1141,6 +1181,7 @@ export const catalogsQueries = {
         totalSales: store.totalSales,
         positiveReviews: store.positiveReviews,
         negativeReviews: store.negativeReviews,
+        reviews: store.reviews ?? [],
         registered: store.createdAt?.split("T")[0] || store.createdAt,
         requestCount: store.requestCount ?? 0,
       },

@@ -516,6 +516,266 @@ export const walletsQueries = {
       },
     };
   },
+
+  getUserReviews: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) throw new GraphQLError("Not authenticated");
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+    const userId = context.user.userId;
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) throw new GraphQLError("User not found");
+
+    // Aggregate all reviews by this user across all stores
+    const pipeline = [
+      { $unwind: "$reviews" },
+      { $match: { "reviews.reviewerId": userId } },
+      { $sort: { "reviews.date": -1 as const } },
+      { $replaceRoot: { newRoot: "$reviews" } },
+    ];
+    const allReviews = await catalogsDB.collection<Store>("Stores").aggregate<Review>(pipeline).toArray();
+
+    const total = allReviews.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allReviews.slice(start, end);
+
+    const edges = sliced.map((r, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        reviewerName: user.username,
+        orderId: r.orderId,
+        type: r.type,
+        review: r.review,
+        date: r.date,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} review(s) found`,
+      user,
+      reviews: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  getStoreReviews: async (
+    _: unknown,
+    { storeId, category, first, after, last, before }: { storeId: string; category: string; first?: number; after?: string; last?: number; before?: string }
+  ) => {
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+    const walletsDB = getWalletsDB();
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", reviews: null };
+    }
+
+    const reviews = store.reviews ?? [];
+    if (reviews.length === 0) {
+      return {
+        code: 200,
+        success: true,
+        message: "0 review(s) found",
+        reviews: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    // Get all orderIds from reviews, then find matching orders, then filter by product category
+    const orderIds = reviews.map((r) => r.orderId);
+    const orders = await walletsDB.collection<Order>("Orders").find({ orderId: { $in: orderIds } }).toArray();
+    const orderMap = new Map(orders.map((o) => [o.orderId, o]));
+
+    const productIds = [...new Set(orders.map((o) => o.productId))];
+    const products = await catalogsDB.collection<Product>("Products").find({ productId: { $in: productIds } }).toArray();
+    const productMap = new Map(products.map((p) => [p.productId, p]));
+
+    // Filter reviews where the order's product matches the requested category
+    const filtered = reviews.filter((r) => {
+      const order = orderMap.get(r.orderId);
+      if (!order) return false;
+      const product = productMap.get(order.productId);
+      return product?.category === category;
+    });
+
+    // Sort by date descending
+    filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const total = filtered.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = filtered.slice(start, end);
+
+    // Batch-fetch reviewer usernames
+    const reviewerIds = [...new Set(sliced.map((r) => r.reviewerId))];
+    const reviewers = await db.collection<User>("users").find({ id: { $in: reviewerIds } }).toArray();
+    const reviewerMap = new Map(reviewers.map((u) => [u.id, u.username]));
+
+    const edges = sliced.map((r, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        reviewerName: reviewerMap.get(r.reviewerId) ?? "Unknown",
+        orderId: r.orderId,
+        type: r.type,
+        review: r.review,
+        date: r.date,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} review(s) found`,
+      reviews: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  getUserStoreReviews: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) throw new GraphQLError("User not found");
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return { code: 404, success: false, message: "Store not found", user, reviews: null };
+    }
+
+    const reviews = (store.reviews ?? []).slice().sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+
+    const total = reviews.length;
+    if (total === 0) {
+      return {
+        code: 200,
+        success: true,
+        message: "0 review(s) found",
+        user,
+        reviews: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = reviews.slice(start, end);
+
+    // Batch-fetch reviewer usernames
+    const reviewerIds = [...new Set(sliced.map((r) => r.reviewerId))];
+    const reviewers = await db.collection<User>("users").find({ id: { $in: reviewerIds } }).toArray();
+    const reviewerMap = new Map(reviewers.map((u) => [u.id, u.username]));
+
+    const edges = sliced.map((r, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        reviewerName: reviewerMap.get(r.reviewerId) ?? "Unknown",
+        orderId: r.orderId,
+        type: r.type,
+        review: r.review,
+        date: r.date,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} review(s) found`,
+      user,
+      reviews: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
 };
 
 export const walletsMutations = {
@@ -1264,7 +1524,13 @@ export const walletsMutations = {
       success: true,
       message: "Review submitted successfully",
       user,
-      review,
+      review: {
+        reviewerName: user.username,
+        orderId: review.orderId,
+        type: review.type,
+        review: review.review,
+        date: review.date,
+      },
     };
   },
 };
