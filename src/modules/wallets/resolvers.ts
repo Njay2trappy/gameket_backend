@@ -155,6 +155,96 @@ export const walletsQueries = {
     };
   },
 
+  getOrder: async (
+    _: unknown,
+    { id }: { id: string }
+  ) => {
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({
+      orderId: id,
+      type: "anonpurchase",
+    });
+
+    if (!order) {
+      return { code: 404, success: false, message: "Order not found", order: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Order retrieved successfully",
+      order: {
+        orderId: order.orderId,
+        buyerId: order.buyerId,
+        buyerName: "gameketstore",
+        sellerId: order.sellerId,
+        sellerName: store?.storeName || "",
+        storeId: order.storeId,
+        product: product ? {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: product.isPromoted,
+          available: product.available,
+          sold: product.sold,
+          type: product.type,
+          createdAt: product.createdAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+        } : null,
+        codes: order.codes.map(decrypt),
+        amount: order.amount,
+        fee: order.fee,
+        totalAmount: order.totalAmount,
+        status: order.status,
+        type: order.type,
+        action: "buy",
+        isReviewed: order.isReviewed,
+        createdAt: order.createdAt,
+        releasedAt: order.releasedAt,
+        store: store ? {
+          storeId: store.storeId,
+          storeName: store.storeName,
+          isActive: store.isActive,
+          isApproved: store.isApproved,
+          approveStatus: store.approveStatus,
+          isPromoted: store.isPromoted,
+          type: store.type,
+          totalSales: store.totalSales,
+          positiveReviews: store.positiveReviews,
+          negativeReviews: store.negativeReviews,
+          registered: store.createdAt,
+          requestCount: store.requestCount,
+        } : null,
+        transaction: null,
+      },
+    };
+  },
+
   getUserOrders: async (
     _: unknown,
     { id, first, after, last, before }: { id?: string; first?: number; after?: string; last?: number; before?: string },
@@ -190,6 +280,8 @@ export const walletsQueries = {
       const txn = await walletsDB.collection<Transaction>("Transactions").findOne({
         id: action === "buy" ? order.buyerTransactionId : order.sellerTransactionId,
       });
+      const buyer = await db.collection<User>("users").findOne({ id: order.buyerId });
+      const seller = await db.collection<User>("users").findOne({ id: order.sellerId });
 
       return {
         code: 200,
@@ -199,7 +291,9 @@ export const walletsQueries = {
         order: {
           orderId: order.orderId,
           buyerId: order.buyerId,
+          buyerName: buyer?.username || "",
           sellerId: order.sellerId,
+          sellerName: seller?.username || "",
           storeId: order.storeId,
           product: product ? {
             productId: product.productId,
@@ -304,6 +398,11 @@ export const walletsQueries = {
     const productMap = new Map(products.map((p) => [p.productId, p]));
     const storeMap = new Map(stores.map((s) => [s.storeId, s]));
 
+    // Batch fetch users (buyers and sellers)
+    const userIds = [...new Set(sliced.flatMap((o) => [o.buyerId, o.sellerId]))];
+    const users = await db.collection<User>("users").find({ id: { $in: userIds } }).toArray();
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
     // Batch fetch transactions (both buyer and seller)
     const buyerTxnIds = [...new Set(sliced.filter((o) => o.buyerId === userId).map((o) => o.buyerTransactionId))];
     const sellerTxnIds = [...new Set(sliced.filter((o) => o.sellerId === userId).map((o) => o.sellerTransactionId))];
@@ -316,13 +415,17 @@ export const walletsQueries = {
       const store = storeMap.get(order.storeId);
       const action = order.buyerId === userId ? "buy" : "sell";
       const txn = txnMap.get(action === "buy" ? order.buyerTransactionId : order.sellerTransactionId);
+      const buyerUser = userMap.get(order.buyerId);
+      const sellerUser = userMap.get(order.sellerId);
 
       return {
         cursor: encodeCursor(start + i),
         node: {
           orderId: order.orderId,
           buyerId: order.buyerId,
+          buyerName: buyerUser?.username || "",
           sellerId: order.sellerId,
+          sellerName: sellerUser?.username || "",
           storeId: order.storeId,
           product: product ? {
             productId: product.productId,
@@ -505,6 +608,7 @@ export const walletsMutations = {
       fee,
       totalCharged,
       status: "pending",
+      type: "deposit",
     };
 
     const transactionRecord: Transaction = {
@@ -830,6 +934,200 @@ export const walletsMutations = {
         amount: transaction.amount,
         createdAt: transaction.createdAt,
       },
+    };
+  },
+
+  buyCodesbyAnon: async (
+    _: unknown,
+    { productId, quantity, email }: { productId: string; quantity: number; email: string }
+  ) => {
+    const errorResponse = { order: null, deposit: null, payId: null, paymentLink: null };
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return { code: 400, success: false, message: "Quantity must be a positive integer", ...errorResponse };
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return { code: 400, success: false, message: "Invalid email address", ...errorResponse };
+    }
+
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found", ...errorResponse };
+    }
+
+    if (!product.isActive) {
+      return { code: 400, success: false, message: "Product is not available", ...errorResponse };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
+    if (!store || !store.isActive) {
+      return { code: 400, success: false, message: "This store is currently unavailable", ...errorResponse };
+    }
+
+    if (!store.isApproved) {
+      return { code: 400, success: false, message: "This store is not approved", ...errorResponse };
+    }
+
+    if (product.availableCodes.length < quantity) {
+      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, ...errorResponse };
+    }
+
+    const amount = parseFloat((product.price * quantity).toFixed(2));
+    const fee = parseFloat((amount * 0.007).toFixed(2));
+    const totalAmount = parseFloat((amount + fee).toFixed(2));
+
+    const apiKey = process.env.GAMEKET_PAY_API_KEY;
+    if (!apiKey) {
+      throw new Error("Server configuration error");
+    }
+
+    let paymentResponse;
+    try {
+      const res = await fetch("https://api.pay.gameket.io/create-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, amount: totalAmount }),
+      });
+
+      paymentResponse = await res.json();
+
+      if (!res.ok) {
+        return { code: res.status, success: false, message: "Payment service error", ...errorResponse };
+      }
+    } catch {
+      return { code: 502, success: false, message: "Unable to reach payment service", ...errorResponse };
+    }
+
+    const now = new Date().toISOString();
+    const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const transactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+    const payId = String(paymentResponse.transaction?.txnid || "");
+    const paymentLink = String(paymentResponse.paymentLink || "");
+
+    const purchasedCodes = product.availableCodes.slice(0, quantity);
+
+    // Create order
+    const orderId = randomBytes(36).toString("base64").replace(/[+/=]/g, "");
+
+    const order: Order = {
+      orderId,
+      buyerId: "anon-gameket-id",
+      sellerId: product.userId,
+      storeId: product.storeId,
+      productId,
+      buyerTransactionId: "",
+      sellerTransactionId: "",
+      codes: purchasedCodes,
+      amount,
+      fee,
+      totalAmount,
+      status: "pending",
+      type: "anonpurchase",
+      isReviewed: false,
+      isReleased: false,
+      createdAt: now,
+      releasedAt,
+    };
+
+    await walletsDB.collection<Order>("Orders").insertOne(order);
+
+    // Create deposit record
+    const depositRecord: Deposit = {
+      userId: email,
+      payId,
+      transactionId,
+      orderId,
+      paymentMethod: "Webcheckout",
+      paymentLink,
+      amount,
+      fee,
+      totalCharged: totalAmount,
+      status: "pending",
+      type: "codepurchase",
+    };
+
+    await walletsDB.collection<Deposit>("Deposits").insertOne(depositRecord);
+
+    return {
+      code: 200,
+      success: true,
+      message: "Payment initiated",
+      order: {
+        orderId: order.orderId,
+        buyerId: order.buyerId,
+        buyerName: "gameketstore",
+        sellerId: order.sellerId,
+        sellerName: store.storeName,
+        storeId: order.storeId,
+        product: {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: product.isPromoted,
+          available: product.available,
+          sold: product.sold,
+          type: product.type,
+          createdAt: product.createdAt,
+          store: {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          },
+        },
+        codes: [],
+        amount: order.amount,
+        fee: order.fee,
+        totalAmount: order.totalAmount,
+        status: order.status,
+        type: order.type,
+        action: "buy",
+        isReviewed: order.isReviewed,
+        createdAt: order.createdAt,
+        releasedAt: order.releasedAt,
+        store: {
+          storeId: store.storeId,
+          storeName: store.storeName,
+          isActive: store.isActive,
+          isApproved: store.isApproved,
+          approveStatus: store.approveStatus,
+          isPromoted: store.isPromoted,
+          type: store.type,
+          totalSales: store.totalSales,
+          positiveReviews: store.positiveReviews,
+          negativeReviews: store.negativeReviews,
+          registered: store.createdAt,
+          requestCount: store.requestCount,
+        },
+        transaction: null,
+      },
+      deposit: {
+        amount,
+        fee,
+        totalCharged: totalAmount,
+      },
+      payId,
+      paymentLink,
     };
   },
 };

@@ -1,6 +1,7 @@
 import { Router } from "express";
-import { getDB, getWalletsDB } from "../db.js";
-import type { Deposit, Transaction, Balance } from "../types.js";
+import { randomBytes } from "crypto";
+import { getDB, getWalletsDB, getCatalogsDB } from "../db.js";
+import type { Deposit, Transaction, Balance, Order, Product, Store } from "../types.js";
 import bcrypt from "bcryptjs";
 
 const router = Router();
@@ -46,39 +47,144 @@ router.post("/webhook/deposit", async (req, res) => {
     return;
   }
 
-  if (status === "completed") {
-    // Credit user balance
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: deposit.userId },
-      { $inc: { availableBalance: deposit.amount } }
-    );
+  if (deposit.type === "deposit") {
+    // --- Regular deposit flow ---
+    if (status === "completed") {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: deposit.userId },
+        { $inc: { availableBalance: deposit.amount } }
+      );
 
-    // Update deposit status
-    await walletsDB.collection<Deposit>("Deposits").updateOne(
-      { payId: txnid },
-      { $set: { status: "completed" } }
-    );
+      await walletsDB.collection<Deposit>("Deposits").updateOne(
+        { payId: txnid },
+        { $set: { status: "completed" } }
+      );
 
-    // Update transaction status
-    await walletsDB.collection<Transaction>("Transactions").updateOne(
-      { id: deposit.transactionId },
-      { $set: { status: "completed" } }
-    );
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: deposit.transactionId },
+        { $set: { status: "completed" } }
+      );
 
-    res.status(200).json({ success: true, message: "Deposit completed" });
+      res.status(200).json({ success: true, message: "Deposit completed" });
+    } else {
+      await walletsDB.collection<Deposit>("Deposits").updateOne(
+        { payId: txnid },
+        { $set: { status: "failed" } }
+      );
+
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: deposit.transactionId },
+        { $set: { status: "failed" } }
+      );
+
+      res.status(200).json({ success: true, message: "Deposit marked as failed" });
+    }
+  } else if (deposit.type === "codepurchase") {
+    // --- Anonymous code purchase flow ---
+    const order = await walletsDB.collection<Order>("Orders").findOne({
+      orderId: deposit.orderId,
+      status: "pending",
+      type: "anonpurchase",
+    });
+
+    if (!order) {
+      res.status(404).json({ success: false, message: "Order not found" });
+      return;
+    }
+
+    if (status === "completed") {
+      const catalogsDB = getCatalogsDB();
+      const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+
+      if (!product || product.availableCodes.length < order.codes.length) {
+        await walletsDB.collection<Deposit>("Deposits").updateOne(
+          { payId: txnid },
+          { $set: { status: "failed" } }
+        );
+        await walletsDB.collection<Order>("Orders").updateOne(
+          { orderId: order.orderId },
+          { $set: { status: "failed" } }
+        );
+        res.status(400).json({ success: false, message: "Product codes no longer available" });
+        return;
+      }
+
+      const quantity = order.codes.length;
+      const purchasedCodes = product.availableCodes.slice(0, quantity);
+      const remainingCodes = product.availableCodes.slice(quantity);
+      const now = new Date().toISOString();
+
+      // Move codes from available to sold
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId: order.productId },
+        {
+          $set: { availableCodes: remainingCodes },
+          $push: { soldCodes: { $each: purchasedCodes } },
+          $inc: { available: -quantity, sold: quantity },
+        }
+      );
+
+      // Update store total sales
+      await catalogsDB.collection<Store>("Stores").updateOne(
+        { storeId: order.storeId },
+        { $inc: { totalSales: quantity } }
+      );
+
+      // Credit seller's suspended balance
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: order.amount } }
+      );
+
+      // Create seller transaction
+      const sellerTransactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+
+      const sellerTransaction: Transaction = {
+        userId: order.sellerId,
+        id: sellerTransactionId,
+        type: "SoldCodes",
+        status: "pending",
+        method: "balance",
+        amount: order.amount,
+        createdAt: now,
+      };
+
+      await walletsDB.collection<Transaction>("Transactions").insertOne(sellerTransaction);
+
+      // Update order with codes and transaction
+      await walletsDB.collection<Order>("Orders").updateOne(
+        { orderId: order.orderId },
+        {
+          $set: {
+            codes: purchasedCodes,
+            sellerTransactionId,
+            status: "completed",
+          },
+        }
+      );
+
+      // Update deposit status
+      await walletsDB.collection<Deposit>("Deposits").updateOne(
+        { payId: txnid },
+        { $set: { status: "completed" } }
+      );
+
+      res.status(200).json({ success: true, message: "Purchase completed" });
+    } else {
+      await walletsDB.collection<Deposit>("Deposits").updateOne(
+        { payId: txnid },
+        { $set: { status: "failed" } }
+      );
+
+      await walletsDB.collection<Order>("Orders").updateOne(
+        { orderId: order.orderId },
+        { $set: { status: "failed" } }
+      );
+
+      res.status(200).json({ success: true, message: "Purchase marked as failed" });
+    }
   } else {
-    // Mark as failed for any non-completed status
-    await walletsDB.collection<Deposit>("Deposits").updateOne(
-      { payId: txnid },
-      { $set: { status: "failed" } }
-    );
-
-    await walletsDB.collection<Transaction>("Transactions").updateOne(
-      { id: deposit.transactionId },
-      { $set: { status: "failed" } }
-    );
-
-    res.status(200).json({ success: true, message: "Deposit marked as failed" });
+    res.status(400).json({ success: false, message: "Unknown deposit type" });
   }
 });
 

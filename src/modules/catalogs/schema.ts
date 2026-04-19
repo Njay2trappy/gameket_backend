@@ -7,6 +7,7 @@ export const catalogsTypeDefs = `#graphql
   enum StoreType {
     basic
     premium
+    merchant
   }
 
   enum ApproveStatus {

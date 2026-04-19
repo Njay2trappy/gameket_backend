@@ -42,12 +42,14 @@ export interface Deposit {
   userId: string;
   payId: string;
   transactionId: string;
+  orderId?: string;
   paymentMethod: string;
   paymentLink: string;
   amount: number;
   fee: number;
   totalCharged: number;
   status: string;
+  type: string;
 }
 
 export interface Review {

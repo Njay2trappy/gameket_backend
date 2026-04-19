@@ -21,6 +21,7 @@ export const walletsTypeDefs = `#graphql
 
   enum OrderType {
     userpurchase
+    anonpurchase
   }
 
   enum OrderStatus {
@@ -39,7 +40,9 @@ export const walletsTypeDefs = `#graphql
   type OrderDetails {
     orderId: ID!
     buyerId: String!
+    buyerName: String!
     sellerId: String!
+    sellerName: String!
     storeId: String!
     product: GetProductsProductDetails
     codes: [String!]!
@@ -172,10 +175,18 @@ export const walletsTypeDefs = `#graphql
     orders: OrderConnection
   }
 
+  type GetOrderResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    order: OrderDetails
+  }
+
   extend type Query {
     getUserWallets: GetUserWalletsResponse!
     getUserTransactions(id: ID, first: Int, after: String, last: Int, before: String): GetUserTransactionsResponse!
     getUserOrders(id: ID, first: Int, after: String, last: Int, before: String): GetUserOrdersResponse!
+    getOrder(id: ID!): GetOrderResponse!
   }
 
   input AddWalletOptionInput {
@@ -190,9 +201,20 @@ export const walletsTypeDefs = `#graphql
     method: PaymentMethod
   }
 
+  type BuyCodesbyAnonResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    order: OrderDetails
+    deposit: DepositDetails
+    payId: String
+    paymentLink: String
+  }
+
   extend type Mutation {
     userDeposit(input: UserDepositInput!): UserDepositResponse!
     addWalletOptions(input: AddWalletOptionInput!): AddWalletOptionResponse!
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
+    buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
   }
 `;
