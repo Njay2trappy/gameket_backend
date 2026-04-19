@@ -185,6 +185,7 @@ router.post("/webhook/deposit", async (req, res) => {
         isReviewed: false,
         reviewType: null,
         isReleased: false,
+        disputeReason: null,
         createdAt: now,
         releasedAt,
       };

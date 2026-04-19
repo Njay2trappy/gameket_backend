@@ -1,7 +1,7 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review } from "../../types.js";
+import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage } from "../../types.js";
 import type { Context } from "../../index.js";
 
 function getRankFromSales(totalSales: number): number {
@@ -36,6 +36,30 @@ function encodeCursor(index: number): string {
 function decodeCursor(cursor: string): number {
   const decoded = Buffer.from(cursor, "base64").toString("utf-8");
   return parseInt(decoded.replace("cursor:", ""), 10);
+}
+
+function buildMessagesConnection(messages: DisputeMessage[]) {
+  const reversed = [...messages].reverse();
+  const edges = reversed.map((m, i) => ({
+    cursor: encodeCursor(i),
+    node: {
+      senderId: m.senderId,
+      senderName: m.senderName,
+      message: m.message,
+      sentAt: m.sentAt,
+    },
+  }));
+  return {
+    edges,
+    pageInfo: {
+      hasNextPage: false,
+      hasPreviousPage: false,
+      startCursor: edges.length ? edges[0].cursor : null,
+      endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+      fetchedCount: edges.length,
+      remainingCount: 0,
+    },
+  };
 }
 
 export const walletsQueries = {
@@ -323,6 +347,7 @@ export const walletsQueries = {
         type: order.type,
         action: "buy",
         isReviewed: order.isReviewed,
+        isReleased: order.isReleased,
         reviewType: order.reviewType ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
@@ -434,7 +459,9 @@ export const walletsQueries = {
           type: order.type,
           action,
           isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
           reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -567,7 +594,9 @@ export const walletsQueries = {
           type: order.type,
           action,
           isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
           reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -872,6 +901,227 @@ export const walletsQueries = {
           fetchedCount: edges.length,
           remainingCount: total - end,
         },
+      },
+    };
+  },
+
+  getUserDisputes: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) throw new GraphQLError("User not found");
+
+    const allDisputes = await walletsDB
+      .collection<Dispute>("Disputes")
+      .find({ $or: [{ buyerId: userId }, { sellerId: userId }] })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allDisputes.length;
+    if (total === 0) {
+      return {
+        code: 200,
+        success: true,
+        message: "0 dispute(s) found",
+        user,
+        disputes: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allDisputes.slice(start, end);
+
+    const edges = sliced.map((d, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        disputeId: d.disputeId,
+        orderId: d.orderId,
+        buyerId: d.buyerId,
+        sellerId: d.sellerId,
+        storeId: d.storeId,
+        reason: d.reason,
+        status: d.status,
+        messages: buildMessagesConnection(d.messages || []),
+        createdAt: d.createdAt,
+        order: null,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} dispute(s) found`,
+      user,
+      disputes: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  getUserDisputeDetails: async (
+    _: unknown,
+    { disputeId, first, after, last, before }: { disputeId: string; first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) throw new GraphQLError("User not found");
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", user, dispute: null };
+    }
+
+    if (dispute.buyerId !== userId && dispute.sellerId !== userId) {
+      return { code: 403, success: false, message: "You are not a participant in this dispute", user, dispute: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: dispute.storeId });
+    const buyer = await db.collection<User>("users").findOne({ id: dispute.buyerId });
+    const seller = await db.collection<User>("users").findOne({ id: dispute.sellerId });
+
+    // Paginate messages newest-first
+    const allMessages = [...(dispute.messages || [])].reverse();
+    const total = allMessages.length;
+
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allMessages.slice(start, end);
+
+    const messageEdges = sliced.map((m, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        senderId: m.senderId,
+        senderName: m.senderName,
+        message: m.message,
+        sentAt: m.sentAt,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: "Dispute retrieved successfully",
+      user,
+      dispute: {
+        disputeId: dispute.disputeId,
+        orderId: dispute.orderId,
+        buyerId: dispute.buyerId,
+        sellerId: dispute.sellerId,
+        storeId: dispute.storeId,
+        reason: dispute.reason,
+        status: dispute.status,
+        messages: {
+          edges: messageEdges,
+          pageInfo: {
+            hasNextPage: end < total,
+            hasPreviousPage: start > 0,
+            startCursor: messageEdges.length ? messageEdges[0].cursor : null,
+            endCursor: messageEdges.length ? messageEdges[messageEdges.length - 1].cursor : null,
+            fetchedCount: messageEdges.length,
+            remainingCount: total - end,
+          },
+        },
+        createdAt: dispute.createdAt,
+        order: order ? {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || buyer?.username || "",
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          type: order.type,
+          action: order.buyerId === userId ? "buy" : "sell",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        } : null,
       },
     };
   },
@@ -1220,6 +1470,7 @@ export const walletsMutations = {
       isReviewed: false,
       reviewType: null,
       isReleased: false,
+      disputeReason: null,
       createdAt: now,
       releasedAt,
     };
@@ -1277,7 +1528,9 @@ export const walletsMutations = {
         type: order.type,
         action: "buy",
         isReviewed: order.isReviewed,
+        isReleased: order.isReleased,
         reviewType: order.reviewType ?? null,
+        disputeReason: order.disputeReason ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: updatedStore ? {
@@ -1622,6 +1875,372 @@ export const walletsMutations = {
         type: review.type,
         review: review.review,
         date: review.date,
+      },
+    };
+  },
+
+  refundOrder: async (_: unknown, { orderId }: { orderId: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Not authenticated");
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, order: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Order not found", user, order: null };
+    }
+
+    // Only the seller (store owner) can refund
+    if (order.sellerId !== userId) {
+      return { code: 403, success: false, message: "Only the store owner can refund this order", user, order: null };
+    }
+
+    // Cannot refund already released or refunded orders
+    if (order.isReleased) {
+      return { code: 400, success: false, message: "Cannot refund an already released order", user, order: null };
+    }
+
+    if (order.status === "refunded") {
+      return { code: 400, success: false, message: "This order has already been refunded", user, order: null };
+    }
+
+    const now = new Date().toISOString();
+    if (order.releasedAt <= now) {
+      return { code: 400, success: false, message: "Cannot refund, the release period has already passed", user, order: null };
+    }
+
+    // Refund buyer: credit totalAmount back to available balance
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId: order.buyerId },
+      { $inc: { availableBalance: order.totalAmount } }
+    );
+
+    // Deduct seller: remove amount from suspended balance
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId: order.sellerId },
+      { $inc: { suspendedBalance: -order.amount } }
+    );
+
+    // Decrement store totalSales and recalculate rank
+    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+      { storeId: order.storeId },
+      { $inc: { totalSales: -order.quantity } },
+      { returnDocument: "after" }
+    );
+
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: order.sellerId },
+        { $set: { rank: newRank } }
+      );
+    }
+
+    // Mark buyer transaction as refunded
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.buyerTransactionId },
+      { $set: { status: "refunded" } }
+    );
+
+    // Mark seller transaction as refunded
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.sellerTransactionId },
+      { $set: { status: "refunded" } }
+    );
+
+    // Mark order as refunded
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId },
+      { $set: { status: "refunded", isReleased: true } }
+    );
+
+    const store = updatedStore || await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Order refunded successfully",
+      user,
+      order: {
+        orderId: order.orderId,
+        buyerId: order.buyerId,
+        buyerName: order.buyerName,
+        sellerId: order.sellerId,
+        sellerName: user.username,
+        storeId: order.storeId,
+        product: null,
+        codes: [],
+        amount: order.amount,
+        fee: order.fee,
+        totalAmount: order.totalAmount,
+        status: "refunded",
+        type: order.type,
+        action: "sell",
+        isReviewed: order.isReviewed,
+        isReleased: true,
+        reviewType: order.reviewType ?? null,
+        disputeReason: order.disputeReason ?? null,
+        createdAt: order.createdAt,
+        releasedAt: order.releasedAt,
+        store: store ? {
+          storeId: store.storeId,
+          storeName: store.storeName,
+          isActive: store.isActive,
+          isApproved: store.isApproved,
+          approveStatus: store.approveStatus,
+          isPromoted: store.isPromoted,
+          type: store.type,
+          totalSales: store.totalSales,
+          positiveReviews: store.positiveReviews,
+          negativeReviews: store.negativeReviews,
+          registered: store.createdAt,
+          requestCount: store.requestCount,
+        } : null,
+        transaction: null,
+      },
+    };
+  },
+
+  disputeOrder: async (_: unknown, { orderId, reason }: { orderId: string; reason?: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Not authenticated");
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, dispute: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Order not found", user, dispute: null };
+    }
+
+    // Only the buyer can dispute
+    if (order.buyerId !== userId) {
+      return { code: 403, success: false, message: "Only the buyer can dispute this order", user, dispute: null };
+    }
+
+    if (order.isReleased) {
+      return { code: 400, success: false, message: "Cannot dispute an already released order", user, dispute: null };
+    }
+
+    if (order.status === "disputed") {
+      return { code: 400, success: false, message: "This order is already disputed", user, dispute: null };
+    }
+
+    if (order.status === "refunded") {
+      return { code: 400, success: false, message: "Cannot dispute a refunded order", user, dispute: null };
+    }
+
+    const now = new Date().toISOString();
+    if (order.releasedAt <= now) {
+      return { code: 400, success: false, message: "Cannot dispute, the release period has already passed", user, dispute: null };
+    }
+
+    // Create dispute record with initial message
+    const disputeId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+    const messages: DisputeMessage[] = reason ? [{
+      senderId: userId,
+      senderName: user.username,
+      message: reason,
+      sentAt: now,
+    }] : [];
+
+    const dispute: Dispute = {
+      disputeId,
+      orderId: order.orderId,
+      buyerId: order.buyerId,
+      sellerId: order.sellerId,
+      storeId: order.storeId,
+      reason: reason || null,
+      status: "open",
+      messages,
+      createdAt: now,
+    };
+
+    await walletsDB.collection<Dispute>("Disputes").insertOne(dispute);
+
+    // Mark order as disputed
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId },
+      { $set: { status: "disputed", disputeReason: reason || null } }
+    );
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
+    const seller = await db.collection<User>("users").findOne({ id: order.sellerId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Order disputed successfully",
+      user,
+      dispute: {
+        disputeId,
+        orderId: order.orderId,
+        buyerId: order.buyerId,
+        sellerId: order.sellerId,
+        storeId: order.storeId,
+        reason: reason || null,
+        status: "open",
+        messages: buildMessagesConnection(messages),
+        createdAt: now,
+        order: {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || user.username,
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: "disputed",
+          type: order.type,
+          action: "buy",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: reason || null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        },
+      },
+    };
+  },
+
+  updateDispute: async (_: unknown, { disputeId, message }: { disputeId: string; message: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Not authenticated");
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, dispute: null };
+    }
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", user, dispute: null };
+    }
+
+    // Only buyer or seller can update
+    if (dispute.buyerId !== userId && dispute.sellerId !== userId) {
+      return { code: 403, success: false, message: "You are not a participant in this dispute", user, dispute: null };
+    }
+
+    if (dispute.status === "closed") {
+      return { code: 400, success: false, message: "Cannot update a closed dispute", user, dispute: null };
+    }
+
+    const now = new Date().toISOString();
+    const newMessage: DisputeMessage = {
+      senderId: userId,
+      senderName: user.username,
+      message,
+      sentAt: now,
+    };
+
+    await walletsDB.collection<Dispute>("Disputes").updateOne(
+      { disputeId },
+      { $push: { messages: newMessage } }
+    );
+
+    const updatedMessages = [...(dispute.messages || []), newMessage];
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: dispute.storeId });
+    const buyer = await db.collection<User>("users").findOne({ id: dispute.buyerId });
+    const seller = await db.collection<User>("users").findOne({ id: dispute.sellerId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Dispute updated successfully",
+      user,
+      dispute: {
+        disputeId: dispute.disputeId,
+        orderId: dispute.orderId,
+        buyerId: dispute.buyerId,
+        sellerId: dispute.sellerId,
+        storeId: dispute.storeId,
+        reason: dispute.reason,
+        status: dispute.status,
+        messages: buildMessagesConnection(updatedMessages),
+        createdAt: dispute.createdAt,
+        order: order ? {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || buyer?.username || "",
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          type: order.type,
+          action: order.buyerId === userId ? "buy" : "sell",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        } : null,
       },
     };
   },

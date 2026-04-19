@@ -12,6 +12,7 @@ export const walletsTypeDefs = `#graphql
     pending
     completed
     failed
+    refunded
   }
 
   enum TransactionMethod {
@@ -53,7 +54,9 @@ export const walletsTypeDefs = `#graphql
     type: OrderType!
     action: OrderAction!
     isReviewed: Boolean!
+    isReleased: Boolean!
     reviewType: ReviewType
+    disputeReason: String
     createdAt: String!
     releasedAt: String!
     store: StoreDetails
@@ -191,6 +194,8 @@ export const walletsTypeDefs = `#graphql
     getUserReviews(first: Int, after: String, last: Int, before: String): GetUserReviewsResponse!
     getStoreReviews(storeId: ID!, category: String!, first: Int, after: String, last: Int, before: String): GetStoreReviewsResponse!
     getUserStoreReviews(first: Int, after: String, last: Int, before: String): GetUserStoreReviewsResponse!
+    getUserDisputes(first: Int, after: String, last: Int, before: String): GetUserDisputesResponse!
+    getUserDisputeDetails(disputeId: ID!, first: Int, after: String, last: Int, before: String): GetUserDisputeDetailsResponse!
   }
 
   input AddWalletOptionInput {
@@ -284,5 +289,113 @@ export const walletsTypeDefs = `#graphql
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
     buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
     reviewOrder(orderId: ID!, type: ReviewType!): ReviewOrderResponse!
+    refundOrder(orderId: ID!): RefundOrderResponse!
+    disputeOrder(orderId: ID!, reason: String): DisputeOrderResponse!
+    updateDispute(disputeId: ID!, message: String!): UpdateDisputeResponse!
+  }
+
+  type DisputeOrderResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    dispute: DisputeDetails
+  }
+
+  type DisputeDetails {
+    disputeId: ID!
+    orderId: String!
+    buyerId: String!
+    sellerId: String!
+    storeId: String!
+    reason: String
+    status: DisputeStatus!
+    messages: DisputeMessageConnection
+    createdAt: String!
+    order: OrderDetails
+  }
+
+  enum DisputeStatus {
+    open
+    under_review
+    resolved
+    closed
+  }
+
+  type DisputeMessageDetails {
+    senderId: String!
+    senderName: String!
+    message: String!
+    sentAt: String!
+  }
+
+  type DisputeMessageEdge {
+    cursor: String!
+    node: DisputeMessageDetails!
+  }
+
+  type DisputeMessageConnection {
+    edges: [DisputeMessageEdge!]!
+    pageInfo: DisputeMessagePageInfo!
+  }
+
+  type DisputeMessagePageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
+    fetchedCount: Int!
+    remainingCount: Int!
+  }
+
+  type DisputeEdge {
+    cursor: String!
+    node: DisputeDetails!
+  }
+
+  type DisputeConnection {
+    edges: [DisputeEdge!]!
+    pageInfo: DisputePageInfo!
+  }
+
+  type DisputePageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
+    fetchedCount: Int!
+    remainingCount: Int!
+  }
+
+  type GetUserDisputesResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    disputes: DisputeConnection
+  }
+
+  type GetUserDisputeDetailsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    dispute: DisputeDetails
+  }
+
+  type UpdateDisputeResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    dispute: DisputeDetails
+  }
+
+  type RefundOrderResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    order: OrderDetails
   }
 `;

@@ -175,6 +175,26 @@ export interface Order {
   isReviewed: boolean;
   reviewType: string | null;
   isReleased: boolean;
+  disputeReason: string | null;
   createdAt: string;
   releasedAt: string;
+}
+
+export interface DisputeMessage {
+  senderId: string;
+  senderName: string;
+  message: string;
+  sentAt: string;
+}
+
+export interface Dispute {
+  disputeId: string;
+  orderId: string;
+  buyerId: string;
+  sellerId: string;
+  storeId: string;
+  reason: string | null;
+  status: string;
+  messages: DisputeMessage[];
+  createdAt: string;
 }
