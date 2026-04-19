@@ -211,10 +211,32 @@ export const walletsTypeDefs = `#graphql
     paymentLink: String
   }
 
+  enum ReviewType {
+    positive
+    negative
+  }
+
+  type ReviewDetails {
+    reviewerId: String!
+    orderId: String!
+    type: ReviewType!
+    review: String!
+    date: String!
+  }
+
+  type ReviewOrderResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    review: ReviewDetails
+  }
+
   extend type Mutation {
     userDeposit(input: UserDepositInput!): UserDepositResponse!
     addWalletOptions(input: AddWalletOptionInput!): AddWalletOptionResponse!
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
     buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
+    reviewOrder(orderId: ID!, type: ReviewType!): ReviewOrderResponse!
   }
 `;

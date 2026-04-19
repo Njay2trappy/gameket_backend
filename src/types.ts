@@ -54,8 +54,9 @@ export interface Deposit {
 
 export interface Review {
   reviewerId: string;
-  rating: number;
-  comment: string;
+  orderId: string;
+  type: string;
+  review: string;
   date: string;
 }
 

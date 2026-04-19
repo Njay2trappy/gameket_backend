@@ -1,7 +1,7 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Balance, Deposit, Transaction, Order, Product, Store } from "../../types.js";
+import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review } from "../../types.js";
 import type { Context } from "../../index.js";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
@@ -947,6 +947,10 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Quantity must be a positive integer", ...errorResponse };
     }
 
+    if (quantity > 2) {
+      return { code: 400, success: false, message: "Maximum quantity is 2", ...errorResponse };
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return { code: 400, success: false, message: "Invalid email address", ...errorResponse };
@@ -1130,6 +1134,130 @@ export const walletsMutations = {
       },
       payId,
       paymentLink,
+    };
+  },
+
+  reviewOrder: async (
+    _: unknown,
+    { orderId, type }: { orderId: string; type: "positive" | "negative" },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, review: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Order not found", user, review: null };
+    }
+
+    if (order.buyerId !== userId) {
+      return { code: 403, success: false, message: "Only the buyer can review an order", user, review: null };
+    }
+
+    if (order.status !== "completed") {
+      return { code: 400, success: false, message: "Only completed orders can be reviewed", user, review: null };
+    }
+
+    if (order.isReviewed) {
+      return { code: 409, success: false, message: "This order has already been reviewed", user, review: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+    const productName = product?.name || "product";
+
+    const positiveTemplates = [
+      `Swift delivery. Successfully redeemed ${productName} code. Thumbs up for the seller! Looking forward to more competitive prices ahead.`,
+      `Fast and smooth transaction for ${productName}. Code worked instantly. Highly recommended seller!`,
+      `Great experience purchasing ${productName}. Quick delivery and the code was valid. Will buy again!`,
+      `${productName} code delivered in seconds. Everything worked as expected. Excellent service!`,
+      `Impressed with the speed of delivery for ${productName}. Code redeemed without any issues. Top seller!`,
+      `Purchased ${productName} and received the code immediately. Smooth process from start to finish.`,
+      `${productName} was exactly as described. Instant delivery and easy redemption. Five stars!`,
+      `Reliable seller! ${productName} code arrived quickly and worked perfectly. Would recommend to anyone.`,
+      `Seamless purchase of ${productName}. The code was delivered fast and redeemed without problems.`,
+      `Very satisfied with my ${productName} purchase. Quick turnaround and genuine code. Great seller!`,
+      `${productName} delivered promptly. No issues at all. Will definitely return for more purchases.`,
+      `Bought ${productName} and the code was valid right away. Fast, easy, and trustworthy seller.`,
+      `Excellent transaction for ${productName}. Instant code delivery and it worked on the first try.`,
+      `${productName} purchase went perfectly. Speedy delivery and legitimate code. Couldn't ask for more.`,
+      `Happy with my ${productName} order. The seller was fast and the code worked flawlessly.`,
+      `Smooth and quick delivery of ${productName}. Code activated without any hassle. Recommended!`,
+      `${productName} code was genuine and delivered instantly. Outstanding service from this seller.`,
+      `Fantastic experience buying ${productName}. Everything was quick, easy, and the code was legit.`,
+      `Got my ${productName} code within seconds. Worked perfectly. This seller is dependable!`,
+      `${productName} delivered as promised. Fast service, valid code, great value. Will shop here again.`,
+    ];
+
+    const negativeTemplates = [
+      `Disappointed with ${productName} purchase. Code did not work upon redemption. Not satisfied with this seller.`,
+      `${productName} code was invalid. Delivery was slow and the experience was frustrating overall.`,
+      `Had issues with my ${productName} order. The code failed to redeem. Would not recommend this seller.`,
+      `Poor experience with ${productName}. Code was already used. Very disappointed with the purchase.`,
+      `${productName} code didn't work as expected. Wasted my time trying to redeem it. Not happy.`,
+      `Unsatisfied with ${productName} purchase. The code was rejected during redemption. Needs improvement.`,
+      `${productName} was not as described. Code redemption failed. This seller needs to do better.`,
+      `Frustrating transaction for ${productName}. The code was invalid and support was unhelpful.`,
+      `Bought ${productName} but the code was defective. Took too long and still unresolved. Avoid this seller.`,
+      `${productName} code arrived late and didn't even work. Very poor service from this seller.`,
+      `Not a good experience with ${productName}. Invalid code and no resolution offered. Disappointed.`,
+      `${productName} purchase was a letdown. Code failed to activate. Would not buy from here again.`,
+      `Terrible experience with ${productName}. The code was unusable and I feel misled by the listing.`,
+      `${productName} code was a dud. Slow delivery and invalid redemption. Stay away from this seller.`,
+      `Regret purchasing ${productName}. Code did not work and the process was a hassle from the start.`,
+      `${productName} order was problematic. Code was expired or already redeemed. Very unsatisfactory.`,
+      `Had a bad experience buying ${productName}. The code was rejected and I couldn't get a refund.`,
+      `${productName} didn't live up to expectations. Invalid code received. Will not be returning.`,
+      `Unpleasant transaction for ${productName}. Code redemption failed repeatedly. Not trustworthy.`,
+      `${productName} purchase was a waste. Code didn't work and the seller was unresponsive. Avoid.`,
+    ];
+
+    const templates = type === "positive" ? positiveTemplates : negativeTemplates;
+    const reviewText = templates[Math.floor(Math.random() * templates.length)];
+    const now = new Date().toISOString();
+
+    const review: Review = {
+      reviewerId: userId,
+      orderId,
+      type,
+      review: reviewText,
+      date: now,
+    };
+
+    // Mark order as reviewed
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId },
+      { $set: { isReviewed: true } }
+    );
+
+    // Update store review counts and push review
+    const updateField = type === "positive" ? "positiveReviews" : "negativeReviews";
+    await catalogsDB.collection<Store>("Stores").updateOne(
+      { storeId: order.storeId },
+      {
+        $inc: { [updateField]: 1 },
+        $push: { reviews: review },
+      }
+    );
+
+    return {
+      code: 200,
+      success: true,
+      message: "Review submitted successfully",
+      user,
+      review,
     };
   },
 };

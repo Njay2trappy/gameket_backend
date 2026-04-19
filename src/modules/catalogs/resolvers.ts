@@ -638,10 +638,10 @@ export const catalogsQueries = {
 
     const promotedProductIds = new Set(activePromotions.map((p) => p.productId));
 
-    // Get all active products
+    // Get all active products with available codes
     const allActiveProducts = await catalogsDB
       .collection<Product>("Products")
-      .find({ isActive: true })
+      .find({ isActive: true, available: { $gt: 0 } })
       .toArray();
 
     if (!allActiveProducts.length) {
@@ -878,7 +878,7 @@ export const catalogsQueries = {
     const promotedProductIds = new Set(activePromotions.map((p) => p.productId));
 
     // Build filter query
-    const filter: Record<string, unknown> = { category, isActive: true };
+    const filter: Record<string, unknown> = { category, isActive: true, available: { $gt: 0 } };
     if (region) filter.region = region;
     if (min != null || max != null) {
       filter.price = {} as Record<string, number>;
@@ -1081,7 +1081,7 @@ export const catalogsQueries = {
 
     const allProducts = await catalogsDB
       .collection<Product>("Products")
-      .find({ userId: store.userId, isActive: true })
+      .find({ userId: store.userId, isActive: true, available: { $gt: 0 } })
       .sort({ sold: -1, createdAt: -1 })
       .toArray();
 
