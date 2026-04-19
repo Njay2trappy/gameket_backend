@@ -11,6 +11,7 @@ import { resolvers } from "./resolvers.js";
 import { connectDB, closeDB, getDB, getWalletsDB } from "./db.js";
 import type { Account } from "./types.js";
 import depositRouter from "./rest/deposit.js";
+import { startCronJobs } from "./cron.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -83,6 +84,7 @@ async function main() {
 
   httpServer.listen(PORT, () => {
     console.log(`🚀 Server running at http://localhost:${PORT}/`);
+    startCronJobs();
   });
 
   const shutdown = async () => {

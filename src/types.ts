@@ -146,3 +146,23 @@ export interface VerificationRequest {
   proofPerson: string;
   submittedAt: string;
 }
+
+export interface Order {
+  orderId: string;
+  buyerId: string;
+  sellerId: string;
+  storeId: string;
+  productId: string;
+  buyerTransactionId: string;
+  sellerTransactionId: string;
+  codes: string[];
+  amount: number;
+  fee: number;
+  totalAmount: number;
+  status: string;
+  type: string;
+  isReviewed: boolean;
+  isReleased: boolean;
+  createdAt: string;
+  releasedAt: string;
+}

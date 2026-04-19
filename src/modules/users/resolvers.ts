@@ -277,7 +277,7 @@ export const usersMutations = {
     const transaction: Transaction = {
       userId,
       id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
-      type: "Premium subscription",
+      type: "PremiumSubscription",
       status: "completed",
       method: "balance",
       amount: 15,

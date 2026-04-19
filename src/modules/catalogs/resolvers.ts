@@ -1857,7 +1857,7 @@ export const catalogsMutations = {
     const transaction: Transaction = {
       userId,
       id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
-      type: "Product promotion",
+      type: "ProductPromotion",
       status: "completed",
       method: "balance",
       amount: parseFloat(amount.toFixed(2)),
@@ -1984,7 +1984,7 @@ export const catalogsMutations = {
     const transaction: Transaction = {
       userId,
       id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
-      type: "Store promotion",
+      type: "StorePromotion",
       status: "completed",
       method: "balance",
       amount: parseFloat(amount.toFixed(2)),

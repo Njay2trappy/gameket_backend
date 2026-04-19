@@ -1,12 +1,34 @@
 export const catalogsTypeDefs = `#graphql
+  enum ProductType {
+    Auto
+    Manual
+  }
+
+  enum StoreType {
+    basic
+    premium
+  }
+
+  enum ApproveStatus {
+    pending
+    success
+    failed
+  }
+
+  enum Gender {
+    Male
+    Female
+    Other
+  }
+
   type StoreDetails {
     storeId: ID!
     storeName: String!
     isActive: Boolean!
     isApproved: Boolean!
-    approveStatus: String
+    approveStatus: ApproveStatus
     isPromoted: Boolean!
-    type: String!
+    type: StoreType!
     totalSales: Int!
     positiveReviews: Int!
     negativeReviews: Int!
@@ -171,7 +193,7 @@ export const catalogsTypeDefs = `#graphql
     isPromoted: Boolean!
     available: Int!
     sold: Int!
-    type: String!
+    type: ProductType!
     createdAt: String!
     store: StoreDetails
   }
@@ -261,7 +283,7 @@ export const catalogsTypeDefs = `#graphql
     isPromoted: Boolean!
     available: Int!
     sold: Int!
-    type: String!
+    type: ProductType!
     createdAt: String!
   }
 
@@ -273,7 +295,7 @@ export const catalogsTypeDefs = `#graphql
     description: String!
     marketPrice: Float!
     price: Float!
-    type: String!
+    type: ProductType!
   }
 
   type AddProductResponse {
@@ -393,7 +415,7 @@ export const catalogsTypeDefs = `#graphql
   input RequestStoreAccessInput {
     surname: String!
     otherNames: String!
-    gender: String!
+    gender: Gender!
     dateOfBirth: String!
     address: String!
     nationality: String!
@@ -413,7 +435,7 @@ export const catalogsTypeDefs = `#graphql
     storeName: String!
     surname: String!
     otherNames: String!
-    gender: String!
+    gender: Gender!
     dateOfBirth: String!
     address: String!
     nationality: String!
