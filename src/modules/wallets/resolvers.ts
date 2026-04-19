@@ -2042,6 +2042,12 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "There is already a pending refund offer for this order", user, order: null, refundOffer: null };
     }
 
+    // Limit to 3 refund offers per order (declined offers count toward the limit)
+    const declinedCount = await walletsDB.collection<RefundOffer>("RefundOffers").countDocuments({ orderId, status: "declined" });
+    if (declinedCount >= 3) {
+      return { code: 400, success: false, message: "Maximum of 3 refund offers reached for this order", user, order: null, refundOffer: null };
+    }
+
     // Calculate refund amounts based on per-unit price at time of order
     const pricePerUnit = order.amount / order.quantity;
     const feePerUnit = order.fee / order.quantity;
