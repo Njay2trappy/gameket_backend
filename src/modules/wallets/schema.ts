@@ -30,6 +30,7 @@ export const walletsTypeDefs = `#graphql
     completed
     disputed
     refunded
+    partially_refunded
     failed
   }
 
@@ -61,6 +62,7 @@ export const walletsTypeDefs = `#graphql
     releasedAt: String!
     store: StoreDetails
     transaction: TransactionDetails
+    refundOffer: RefundOfferDetails
   }
 
   type BuyCodesResponse {
@@ -196,6 +198,7 @@ export const walletsTypeDefs = `#graphql
     getUserStoreReviews(first: Int, after: String, last: Int, before: String): GetUserStoreReviewsResponse!
     getUserDisputes(first: Int, after: String, last: Int, before: String): GetUserDisputesResponse!
     getUserDisputeDetails(disputeId: ID!, first: Int, after: String, last: Int, before: String): GetUserDisputeDetailsResponse!
+    getUserRefundOffers(first: Int, after: String, last: Int, before: String): GetUserRefundOffersResponse!
   }
 
   input AddWalletOptionInput {
@@ -289,10 +292,12 @@ export const walletsTypeDefs = `#graphql
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
     buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
     reviewOrder(orderId: ID!, type: ReviewType!): ReviewOrderResponse!
-    refundOrder(orderId: ID!): RefundOrderResponse!
+    refundOrder(orderId: ID!, quantity: Int!): RefundOrderResponse!
     disputeOrder(orderId: ID!, reason: String): DisputeOrderResponse!
     updateDispute(disputeId: ID!, message: String!): UpdateDisputeResponse!
     closeDispute(disputeId: ID!): CloseDisputeResponse!
+    acceptRefund(refundId: ID!): AcceptRefundResponse!
+    declineRefund(refundId: ID!): DeclineRefundResponse!
   }
 
   type DisputeOrderResponse {
@@ -406,5 +411,69 @@ export const walletsTypeDefs = `#graphql
     message: String!
     user: User
     order: OrderDetails
+    refundOffer: RefundOfferDetails
+  }
+
+  enum RefundOfferStatus {
+    pending
+    accepted
+    declined
+  }
+
+  type RefundOfferDetails {
+    refundId: ID!
+    orderId: String!
+    buyerId: String!
+    sellerId: String!
+    storeId: String!
+    quantity: Int!
+    refundAmount: Float!
+    sellerDeduction: Float!
+    status: RefundOfferStatus!
+    createdAt: String!
+    order: OrderDetails
+  }
+
+  type RefundOfferEdge {
+    cursor: String!
+    node: RefundOfferDetails!
+  }
+
+  type RefundOfferConnection {
+    edges: [RefundOfferEdge!]!
+    pageInfo: RefundOfferPageInfo!
+  }
+
+  type RefundOfferPageInfo {
+    hasNextPage: Boolean!
+    hasPreviousPage: Boolean!
+    startCursor: String
+    endCursor: String
+    fetchedCount: Int!
+    remainingCount: Int!
+  }
+
+  type GetUserRefundOffersResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    refundOffers: RefundOfferConnection
+  }
+
+  type AcceptRefundResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    refundOffer: RefundOfferDetails
+  }
+
+  type DeclineRefundResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    refundOffer: RefundOfferDetails
   }
 `;

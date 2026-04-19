@@ -1,7 +1,7 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage } from "../../types.js";
+import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer } from "../../types.js";
 import type { Context } from "../../index.js";
 
 function getRankFromSales(totalSales: number): number {
@@ -408,6 +408,8 @@ export const walletsQueries = {
       const buyer = await db.collection<User>("users").findOne({ id: order.buyerId });
       const seller = await db.collection<User>("users").findOne({ id: order.sellerId });
 
+      const refundOffer = await walletsDB.collection<RefundOffer>("RefundOffers").findOne({ orderId: id, status: "pending" });
+
       return {
         code: 200,
         success: true,
@@ -486,6 +488,19 @@ export const walletsQueries = {
             amount: txn.amount,
             createdAt: txn.createdAt,
           } : null,
+          refundOffer: refundOffer ? {
+            refundId: refundOffer.refundId,
+            orderId: refundOffer.orderId,
+            buyerId: refundOffer.buyerId,
+            sellerId: refundOffer.sellerId,
+            storeId: refundOffer.storeId,
+            quantity: refundOffer.quantity,
+            refundAmount: refundOffer.refundAmount,
+            sellerDeduction: refundOffer.sellerDeduction,
+            status: refundOffer.status,
+            createdAt: refundOffer.createdAt,
+            order: null,
+          } : null,
         },
         orders: null,
       };
@@ -538,6 +553,11 @@ export const walletsQueries = {
     const transactions = await walletsDB.collection<Transaction>("Transactions").find({ id: { $in: allTxnIds } }).toArray();
     const txnMap = new Map(transactions.map((t) => [t.id, t]));
 
+    // Batch fetch pending refund offers
+    const orderIdsForOffers = [...new Set(sliced.map((o) => o.orderId))];
+    const refundOffers = await walletsDB.collection<RefundOffer>("RefundOffers").find({ orderId: { $in: orderIdsForOffers }, status: "pending" }).toArray();
+    const refundOfferMap = new Map(refundOffers.map((r) => [r.orderId, r]));
+
     const edges = sliced.map((order, i) => {
       const product = productMap.get(order.productId);
       const store = storeMap.get(order.storeId);
@@ -545,6 +565,7 @@ export const walletsQueries = {
       const txn = txnMap.get(action === "buy" ? order.buyerTransactionId : order.sellerTransactionId);
       const buyerUser = userMap.get(order.buyerId);
       const sellerUser = userMap.get(order.sellerId);
+      const ro = refundOfferMap.get(order.orderId);
 
       return {
         cursor: encodeCursor(start + i),
@@ -620,6 +641,19 @@ export const walletsQueries = {
             method: txn.method,
             amount: txn.amount,
             createdAt: txn.createdAt,
+          } : null,
+          refundOffer: ro ? {
+            refundId: ro.refundId,
+            orderId: ro.orderId,
+            buyerId: ro.buyerId,
+            sellerId: ro.sellerId,
+            storeId: ro.storeId,
+            quantity: ro.quantity,
+            refundAmount: ro.refundAmount,
+            sellerDeduction: ro.sellerDeduction,
+            status: ro.status,
+            createdAt: ro.createdAt,
+            order: null,
           } : null,
         },
       };
@@ -1122,6 +1156,86 @@ export const walletsQueries = {
           } : null,
           transaction: null,
         } : null,
+      },
+    };
+  },
+
+  getUserRefundOffers: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) throw new GraphQLError("User not found");
+
+    const allOffers = await walletsDB.collection<RefundOffer>("RefundOffers")
+      .find({ $or: [{ buyerId: userId }, { sellerId: userId }] })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allOffers.length;
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allOffers.slice(start, end);
+
+    const edges = sliced.map((o, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        refundId: o.refundId,
+        orderId: o.orderId,
+        buyerId: o.buyerId,
+        sellerId: o.sellerId,
+        storeId: o.storeId,
+        quantity: o.quantity,
+        refundAmount: o.refundAmount,
+        sellerDeduction: o.sellerDeduction,
+        status: o.status,
+        createdAt: o.createdAt,
+        order: null,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} refund offer(s) found`,
+      user,
+      refundOffers: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
       },
     };
   },
@@ -1879,7 +1993,7 @@ export const walletsMutations = {
     };
   },
 
-  refundOrder: async (_: unknown, { orderId }: { orderId: string }, context: Context) => {
+  refundOrder: async (_: unknown, { orderId, quantity }: { orderId: string; quantity: number }, context: Context) => {
     if (!context.user) {
       throw new GraphQLError(context.authError || "Not authenticated");
     }
@@ -1891,129 +2005,225 @@ export const walletsMutations = {
 
     const user = await db.collection<User>("users").findOne({ id: userId });
     if (!user) {
-      return { code: 404, success: false, message: "User not found", user: null, order: null };
+      return { code: 404, success: false, message: "User not found", user: null, order: null, refundOffer: null };
     }
 
     const order = await walletsDB.collection<Order>("Orders").findOne({ orderId });
     if (!order) {
-      return { code: 404, success: false, message: "Order not found", user, order: null };
+      return { code: 404, success: false, message: "Order not found", user, order: null, refundOffer: null };
     }
 
     // Only the seller (store owner) can refund
     if (order.sellerId !== userId) {
-      return { code: 403, success: false, message: "Only the store owner can refund this order", user, order: null };
+      return { code: 403, success: false, message: "Only the store owner can refund this order", user, order: null, refundOffer: null };
     }
 
     // Cannot refund already released or refunded orders
     if (order.isReleased) {
-      return { code: 400, success: false, message: "Cannot refund an already released order", user, order: null };
+      return { code: 400, success: false, message: "Cannot refund an already released order", user, order: null, refundOffer: null };
     }
 
     if (order.status === "refunded") {
-      return { code: 400, success: false, message: "This order has already been refunded", user, order: null };
+      return { code: 400, success: false, message: "This order has already been refunded", user, order: null, refundOffer: null };
     }
 
     const now = new Date().toISOString();
     if (order.releasedAt <= now) {
-      return { code: 400, success: false, message: "Cannot refund, the release period has already passed", user, order: null };
+      return { code: 400, success: false, message: "Cannot refund, the release period has already passed", user, order: null, refundOffer: null };
     }
 
-    // Refund buyer: credit totalAmount back to available balance
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: order.buyerId },
-      { $inc: { availableBalance: order.totalAmount } }
-    );
+    if (quantity <= 0 || quantity > order.quantity) {
+      return { code: 400, success: false, message: `Quantity must be between 1 and ${order.quantity}`, user, order: null, refundOffer: null };
+    }
 
-    // Deduct seller: remove amount from suspended balance
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: order.sellerId },
-      { $inc: { suspendedBalance: -order.amount } }
-    );
+    // Check for existing pending refund offer on this order
+    const existingOffer = await walletsDB.collection<RefundOffer>("RefundOffers").findOne({ orderId, status: "pending" });
+    if (existingOffer) {
+      return { code: 400, success: false, message: "There is already a pending refund offer for this order", user, order: null, refundOffer: null };
+    }
 
-    // Decrement store totalSales and recalculate rank
-    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
-      { storeId: order.storeId },
-      { $inc: { totalSales: -order.quantity } },
-      { returnDocument: "after" }
-    );
+    // Calculate refund amounts based on per-unit price at time of order
+    const pricePerUnit = order.amount / order.quantity;
+    const feePerUnit = order.fee / order.quantity;
+    const sellerDeduction = parseFloat((pricePerUnit * quantity).toFixed(2));
+    const refundAmount = parseFloat(((pricePerUnit + feePerUnit) * quantity).toFixed(2));
 
-    if (updatedStore) {
-      const newRank = getRankFromSales(updatedStore.totalSales);
-      await db.collection<User>("users").updateOne(
-        { id: order.sellerId },
-        { $set: { rank: newRank } }
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
+
+    // Full refund (quantity === order.quantity): process immediately
+    if (quantity === order.quantity) {
+      // Refund buyer
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.buyerId },
+        { $inc: { availableBalance: refundAmount } }
       );
-    }
 
-    // Mark buyer transaction as refunded
-    await walletsDB.collection<Transaction>("Transactions").updateOne(
-      { id: order.buyerTransactionId },
-      { $set: { status: "refunded" } }
-    );
+      // Deduct seller suspended balance
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: -sellerDeduction } }
+      );
 
-    // Mark seller transaction as refunded
-    await walletsDB.collection<Transaction>("Transactions").updateOne(
-      { id: order.sellerTransactionId },
-      { $set: { status: "refunded" } }
-    );
+      // Decrement store totalSales and recalculate rank
+      const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+        { storeId: order.storeId },
+        { $inc: { totalSales: -order.quantity } },
+        { returnDocument: "after" }
+      );
 
-    // Mark order as refunded
-    await walletsDB.collection<Order>("Orders").updateOne(
-      { orderId },
-      { $set: { status: "refunded", isReleased: true } }
-    );
+      if (updatedStore) {
+        const newRank = getRankFromSales(updatedStore.totalSales);
+        await db.collection<User>("users").updateOne(
+          { id: order.sellerId },
+          { $set: { rank: newRank } }
+        );
+      }
 
-    // If order was disputed, close the dispute
-    if (order.status === "disputed") {
-      await walletsDB.collection<Dispute>("Disputes").updateOne(
+      // Mark transactions as refunded
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: order.buyerTransactionId },
+        { $set: { status: "refunded" } }
+      );
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: order.sellerTransactionId },
+        { $set: { status: "refunded" } }
+      );
+
+      // Mark order as refunded
+      await walletsDB.collection<Order>("Orders").updateOne(
         { orderId },
-        { $set: { status: "closed" } }
+        { $set: { status: "refunded", isReleased: true } }
       );
+
+      // If order was disputed, close the dispute
+      if (order.status === "disputed") {
+        await walletsDB.collection<Dispute>("Disputes").updateOne(
+          { orderId },
+          { $set: { status: "closed" } }
+        );
+      }
+
+      const finalStore = updatedStore || store;
+      return {
+        code: 200,
+        success: true,
+        message: "Full refund processed successfully",
+        user,
+        order: {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName,
+          sellerId: order.sellerId,
+          sellerName: user.username,
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: "refunded",
+          type: order.type,
+          action: "sell",
+          isReviewed: order.isReviewed,
+          isReleased: true,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: finalStore ? {
+            storeId: finalStore.storeId,
+            storeName: finalStore.storeName,
+            isActive: finalStore.isActive,
+            isApproved: finalStore.isApproved,
+            approveStatus: finalStore.approveStatus,
+            isPromoted: finalStore.isPromoted,
+            type: finalStore.type,
+            totalSales: finalStore.totalSales,
+            positiveReviews: finalStore.positiveReviews,
+            negativeReviews: finalStore.negativeReviews,
+            registered: finalStore.createdAt,
+            requestCount: finalStore.requestCount,
+          } : null,
+          transaction: null,
+        },
+        refundOffer: null,
+      };
     }
 
-    const store = updatedStore || await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
+    // Partial refund: create an offer for the buyer to accept/decline
+    const refundId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+
+    const refundOffer: RefundOffer = {
+      refundId,
+      orderId: order.orderId,
+      buyerId: order.buyerId,
+      sellerId: order.sellerId,
+      storeId: order.storeId,
+      quantity,
+      refundAmount,
+      sellerDeduction,
+      status: "pending",
+      createdAt: now,
+    };
+
+    await walletsDB.collection<RefundOffer>("RefundOffers").insertOne(refundOffer);
+
+    const seller = await db.collection<User>("users").findOne({ id: order.sellerId });
 
     return {
       code: 200,
       success: true,
-      message: "Order refunded successfully",
+      message: `Partial refund offer created for ${quantity} of ${order.quantity} item(s). Awaiting buyer approval.`,
       user,
-      order: {
+      order: null,
+      refundOffer: {
+        refundId,
         orderId: order.orderId,
         buyerId: order.buyerId,
-        buyerName: order.buyerName,
         sellerId: order.sellerId,
-        sellerName: user.username,
         storeId: order.storeId,
-        product: null,
-        codes: [],
-        amount: order.amount,
-        fee: order.fee,
-        totalAmount: order.totalAmount,
-        status: "refunded",
-        type: order.type,
-        action: "sell",
-        isReviewed: order.isReviewed,
-        isReleased: true,
-        reviewType: order.reviewType ?? null,
-        disputeReason: order.disputeReason ?? null,
-        createdAt: order.createdAt,
-        releasedAt: order.releasedAt,
-        store: store ? {
-          storeId: store.storeId,
-          storeName: store.storeName,
-          isActive: store.isActive,
-          isApproved: store.isApproved,
-          approveStatus: store.approveStatus,
-          isPromoted: store.isPromoted,
-          type: store.type,
-          totalSales: store.totalSales,
-          positiveReviews: store.positiveReviews,
-          negativeReviews: store.negativeReviews,
-          registered: store.createdAt,
-          requestCount: store.requestCount,
-        } : null,
-        transaction: null,
+        quantity,
+        refundAmount,
+        sellerDeduction,
+        status: "pending",
+        createdAt: now,
+        order: {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName,
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          type: order.type,
+          action: "sell",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        },
       },
     };
   },
@@ -2306,6 +2516,246 @@ export const walletsMutations = {
         status: "closed",
         messages: buildMessagesConnection(dispute.messages || []),
         createdAt: dispute.createdAt,
+        order: order ? {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || buyer?.username || "",
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          type: order.type,
+          action: "buy",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        } : null,
+      },
+    };
+  },
+
+  acceptRefund: async (_: unknown, { refundId }: { refundId: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Not authenticated");
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, refundOffer: null };
+    }
+
+    const offer = await walletsDB.collection<RefundOffer>("RefundOffers").findOne({ refundId });
+    if (!offer) {
+      return { code: 404, success: false, message: "Refund offer not found", user, refundOffer: null };
+    }
+
+    // Only the buyer can accept
+    if (offer.buyerId !== userId) {
+      return { code: 403, success: false, message: "Only the buyer can accept a refund offer", user, refundOffer: null };
+    }
+
+    if (offer.status !== "pending") {
+      return { code: 400, success: false, message: `This refund offer has already been ${offer.status}`, user, refundOffer: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: offer.orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Associated order not found", user, refundOffer: null };
+    }
+
+    // Process the partial refund
+    // Refund buyer
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId: offer.buyerId },
+      { $inc: { availableBalance: offer.refundAmount } }
+    );
+
+    // Deduct seller suspended balance
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId: offer.sellerId },
+      { $inc: { suspendedBalance: -offer.sellerDeduction } }
+    );
+
+    // Decrement store totalSales by the refunded quantity
+    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+      { storeId: offer.storeId },
+      { $inc: { totalSales: -offer.quantity } },
+      { returnDocument: "after" }
+    );
+
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: offer.sellerId },
+        { $set: { rank: newRank } }
+      );
+    }
+
+    // Mark refund offer as accepted
+    await walletsDB.collection<RefundOffer>("RefundOffers").updateOne(
+      { refundId },
+      { $set: { status: "accepted" } }
+    );
+
+    // Update order to reflect partial refund
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId: offer.orderId },
+      { $set: { status: "partially_refunded" } }
+    );
+
+    // If order was disputed, close the dispute
+    if (order.status === "disputed") {
+      await walletsDB.collection<Dispute>("Disputes").updateOne(
+        { orderId: offer.orderId },
+        { $set: { status: "closed" } }
+      );
+    }
+
+    const store = updatedStore || await catalogsDB.collection<Store>("Stores").findOne({ storeId: offer.storeId });
+    const buyer = await db.collection<User>("users").findOne({ id: offer.buyerId });
+    const seller = await db.collection<User>("users").findOne({ id: offer.sellerId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Refund offer accepted and processed successfully",
+      user,
+      refundOffer: {
+        refundId: offer.refundId,
+        orderId: offer.orderId,
+        buyerId: offer.buyerId,
+        sellerId: offer.sellerId,
+        storeId: offer.storeId,
+        quantity: offer.quantity,
+        refundAmount: offer.refundAmount,
+        sellerDeduction: offer.sellerDeduction,
+        status: "accepted",
+        createdAt: offer.createdAt,
+        order: {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || buyer?.username || "",
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: "partially_refunded",
+          type: order.type,
+          action: "buy",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        },
+      },
+    };
+  },
+
+  declineRefund: async (_: unknown, { refundId }: { refundId: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Not authenticated");
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, refundOffer: null };
+    }
+
+    const offer = await walletsDB.collection<RefundOffer>("RefundOffers").findOne({ refundId });
+    if (!offer) {
+      return { code: 404, success: false, message: "Refund offer not found", user, refundOffer: null };
+    }
+
+    // Only the buyer can decline
+    if (offer.buyerId !== userId) {
+      return { code: 403, success: false, message: "Only the buyer can decline a refund offer", user, refundOffer: null };
+    }
+
+    if (offer.status !== "pending") {
+      return { code: 400, success: false, message: `This refund offer has already been ${offer.status}`, user, refundOffer: null };
+    }
+
+    // Mark refund offer as declined
+    await walletsDB.collection<RefundOffer>("RefundOffers").updateOne(
+      { refundId },
+      { $set: { status: "declined" } }
+    );
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: offer.orderId });
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: offer.storeId });
+    const buyer = await db.collection<User>("users").findOne({ id: offer.buyerId });
+    const seller = await db.collection<User>("users").findOne({ id: offer.sellerId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Refund offer declined",
+      user,
+      refundOffer: {
+        refundId: offer.refundId,
+        orderId: offer.orderId,
+        buyerId: offer.buyerId,
+        sellerId: offer.sellerId,
+        storeId: offer.storeId,
+        quantity: offer.quantity,
+        refundAmount: offer.refundAmount,
+        sellerDeduction: offer.sellerDeduction,
+        status: "declined",
+        createdAt: offer.createdAt,
         order: order ? {
           orderId: order.orderId,
           buyerId: order.buyerId,

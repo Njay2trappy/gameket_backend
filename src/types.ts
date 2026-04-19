@@ -198,3 +198,16 @@ export interface Dispute {
   messages: DisputeMessage[];
   createdAt: string;
 }
+
+export interface RefundOffer {
+  refundId: string;
+  orderId: string;
+  buyerId: string;
+  sellerId: string;
+  storeId: string;
+  quantity: number;
+  refundAmount: number;
+  sellerDeduction: number;
+  status: string;
+  createdAt: string;
+}
