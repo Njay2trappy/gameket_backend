@@ -1,8 +1,21 @@
 import { Router } from "express";
 import { randomBytes } from "crypto";
 import { getDB, getWalletsDB, getCatalogsDB } from "../db.js";
-import type { Deposit, Transaction, Balance, Order, Product, Store } from "../types.js";
+import type { Deposit, Transaction, Balance, Order, Product, Store, User } from "../types.js";
 import bcrypt from "bcryptjs";
+
+function getRankFromSales(totalSales: number): number {
+  if (totalSales >= 10000) return 10;
+  if (totalSales >= 9000) return 9;
+  if (totalSales >= 7500) return 8;
+  if (totalSales >= 5000) return 7;
+  if (totalSales >= 3500) return 6;
+  if (totalSales >= 2500) return 5;
+  if (totalSales >= 1000) return 4;
+  if (totalSales >= 500) return 3;
+  if (totalSales >= 100) return 2;
+  return 1;
+}
 
 const router = Router();
 
@@ -116,10 +129,20 @@ router.post("/webhook/deposit", async (req, res) => {
       );
 
       // Update store total sales
-      await catalogsDB.collection<Store>("Stores").updateOne(
+      const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
         { storeId: deposit.storeId },
-        { $inc: { totalSales: quantity } }
+        { $inc: { totalSales: quantity } },
+        { returnDocument: "after" }
       );
+
+      // Update seller rank based on new total sales
+      if (updatedStore) {
+        const newRank = getRankFromSales(updatedStore.totalSales);
+        await db.collection<User>("users").updateOne(
+          { id: deposit.sellerId },
+          { $set: { rank: newRank } }
+        );
+      }
 
       // Credit seller's suspended balance
       await walletsDB.collection<Balance>("Balances").updateOne(

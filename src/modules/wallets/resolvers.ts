@@ -4,6 +4,19 @@ import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review } from "../../types.js";
 import type { Context } from "../../index.js";
 
+function getRankFromSales(totalSales: number): number {
+  if (totalSales >= 10000) return 10;
+  if (totalSales >= 9000) return 9;
+  if (totalSales >= 7500) return 8;
+  if (totalSales >= 5000) return 7;
+  if (totalSales >= 3500) return 6;
+  if (totalSales >= 2500) return 5;
+  if (totalSales >= 1000) return 4;
+  if (totalSales >= 500) return 3;
+  if (totalSales >= 100) return 2;
+  return 1;
+}
+
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
 const ALGORITHM = "aes-256-gcm";
 
@@ -1143,6 +1156,15 @@ export const walletsMutations = {
       { $inc: { totalSales: quantity } },
       { returnDocument: "after" }
     );
+
+    // Update seller rank based on new total sales
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: product.userId },
+        { $set: { rank: newRank } }
+      );
+    }
 
     // Create transaction for buyer
     const now = new Date().toISOString();
