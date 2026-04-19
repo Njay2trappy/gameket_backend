@@ -998,11 +998,15 @@ export const walletsQueries = {
     const orders = await walletsDB.collection<Order>("Orders").find({ orderId: { $in: orderIds } }).toArray();
     const orderMap = new Map(orders.map((o) => [o.orderId, o]));
 
-    // Batch fetch stores
+    // Batch fetch stores and products
     const catalogsDB = getCatalogsDB();
     const storeIds = [...new Set(sliced.map((d) => d.storeId))];
     const stores = await catalogsDB.collection<Store>("Stores").find({ storeId: { $in: storeIds } }).toArray();
     const storeMap = new Map(stores.map((s) => [s.storeId, s]));
+
+    const productIds = [...new Set(orders.map((o) => o.productId))];
+    const products = await catalogsDB.collection<Product>("Products").find({ productId: { $in: productIds } }).toArray();
+    const productMap = new Map(products.map((p) => [p.productId, p]));
 
     // Batch fetch users (buyers and sellers)
     const userIds = [...new Set(sliced.flatMap((d) => [d.buyerId, d.sellerId]))];
@@ -1012,6 +1016,7 @@ export const walletsQueries = {
     const edges = sliced.map((d, i) => {
       const order = orderMap.get(d.orderId);
       const store = storeMap.get(d.storeId);
+      const product = order ? productMap.get(order.productId) : null;
       const buyer = userMap.get(d.buyerId);
       const seller = userMap.get(d.sellerId);
 
@@ -1034,7 +1039,37 @@ export const walletsQueries = {
             sellerId: order.sellerId,
             sellerName: seller?.username || "",
             storeId: order.storeId,
-            product: null,
+            product: product ? {
+              productId: product.productId,
+              catalog: product.catalog,
+              category: product.category,
+              region: product.region,
+              name: product.name,
+              description: product.description,
+              marketPrice: product.marketPrice,
+              price: product.price,
+              discount: product.discount,
+              isActive: product.isActive,
+              isPromoted: product.isPromoted,
+              available: product.available,
+              sold: product.sold,
+              type: product.type,
+              createdAt: product.createdAt,
+              store: store ? {
+                storeId: store.storeId,
+                storeName: store.storeName,
+                isActive: store.isActive,
+                isApproved: store.isApproved,
+                approveStatus: store.approveStatus,
+                isPromoted: store.isPromoted,
+                type: store.type,
+                totalSales: store.totalSales,
+                positiveReviews: store.positiveReviews,
+                negativeReviews: store.negativeReviews,
+                registered: store.createdAt,
+                requestCount: store.requestCount,
+              } : null,
+            } : null,
             codes: [],
             amount: order.amount,
             fee: order.fee,
