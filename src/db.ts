@@ -77,6 +77,28 @@ export async function connectDB(): Promise<Db> {
     { $set: { requestCount: 0 } }
   );
 
+  // Backfill transaction type values to match enum
+  await walletsDb.collection("Transactions").updateMany(
+    { type: "Premium subscription" },
+    { $set: { type: "PremiumSubscription" } }
+  );
+  await walletsDb.collection("Transactions").updateMany(
+    { type: "Product promotion" },
+    { $set: { type: "ProductPromotion" } }
+  );
+  await walletsDb.collection("Transactions").updateMany(
+    { type: "Store promotion" },
+    { $set: { type: "StorePromotion" } }
+  );
+  await walletsDb.collection("Transactions").updateMany(
+    { type: "Product purchase" },
+    { $set: { type: "ProductPurchase" } }
+  );
+  await walletsDb.collection("Transactions").updateMany(
+    { type: "Sold codes" },
+    { $set: { type: "SoldCodes" } }
+  );
+
   return db;
 }
 
