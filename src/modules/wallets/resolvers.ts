@@ -1963,6 +1963,14 @@ export const walletsMutations = {
       { $set: { status: "refunded", isReleased: true } }
     );
 
+    // If order was disputed, close the dispute
+    if (order.status === "disputed") {
+      await walletsDB.collection<Dispute>("Disputes").updateOne(
+        { orderId },
+        { $set: { status: "closed" } }
+      );
+    }
+
     const store = updatedStore || await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
 
     return {
@@ -2219,6 +2227,100 @@ export const walletsMutations = {
           status: order.status,
           type: order.type,
           action: order.buyerId === userId ? "buy" : "sell",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        } : null,
+      },
+    };
+  },
+
+  closeDispute: async (_: unknown, { disputeId }: { disputeId: string }, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Not authenticated");
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, dispute: null };
+    }
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", user, dispute: null };
+    }
+
+    if (dispute.buyerId !== userId) {
+      return { code: 403, success: false, message: "Only the buyer can close a dispute", user, dispute: null };
+    }
+
+    if (dispute.status === "closed") {
+      return { code: 400, success: false, message: "This dispute is already closed", user, dispute: null };
+    }
+
+    await walletsDB.collection<Dispute>("Disputes").updateOne(
+      { disputeId },
+      { $set: { status: "closed" } }
+    );
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: dispute.storeId });
+    const buyer = await db.collection<User>("users").findOne({ id: dispute.buyerId });
+    const seller = await db.collection<User>("users").findOne({ id: dispute.sellerId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Dispute closed successfully",
+      user,
+      dispute: {
+        disputeId: dispute.disputeId,
+        orderId: dispute.orderId,
+        buyerId: dispute.buyerId,
+        sellerId: dispute.sellerId,
+        storeId: dispute.storeId,
+        reason: dispute.reason,
+        status: "closed",
+        messages: buildMessagesConnection(dispute.messages || []),
+        createdAt: dispute.createdAt,
+        order: order ? {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || buyer?.username || "",
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          type: order.type,
+          action: "buy",
           isReviewed: order.isReviewed,
           isReleased: order.isReleased,
           reviewType: order.reviewType ?? null,

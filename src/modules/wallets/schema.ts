@@ -292,6 +292,7 @@ export const walletsTypeDefs = `#graphql
     refundOrder(orderId: ID!): RefundOrderResponse!
     disputeOrder(orderId: ID!, reason: String): DisputeOrderResponse!
     updateDispute(disputeId: ID!, message: String!): UpdateDisputeResponse!
+    closeDispute(disputeId: ID!): CloseDisputeResponse!
   }
 
   type DisputeOrderResponse {
@@ -384,6 +385,14 @@ export const walletsTypeDefs = `#graphql
   }
 
   type UpdateDisputeResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    dispute: DisputeDetails
+  }
+
+  type CloseDisputeResponse {
     code: Int!
     success: Boolean!
     message: String!
