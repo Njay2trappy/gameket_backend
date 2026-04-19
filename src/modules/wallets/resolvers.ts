@@ -168,7 +168,93 @@ export const walletsQueries = {
     });
 
     if (!order) {
-      return { code: 404, success: false, message: "Order not found", order: null };
+      // Order not yet created — check if there's a pending deposit for this orderId
+      const deposit = await walletsDB.collection<Deposit>("Deposits").findOne({
+        orderId: id,
+        type: "codepurchase",
+      });
+
+      if (!deposit) {
+        return { code: 404, success: false, message: "Order not found", order: null };
+      }
+
+      const product = deposit.productId
+        ? await catalogsDB.collection<Product>("Products").findOne({ productId: deposit.productId })
+        : null;
+      const store = deposit.storeId
+        ? await catalogsDB.collection<Store>("Stores").findOne({ storeId: deposit.storeId })
+        : null;
+
+      return {
+        code: 200,
+        success: true,
+        message: "Order retrieved successfully",
+        order: {
+          orderId: deposit.orderId,
+          buyerId: "anon-gameket-id",
+          buyerName: deposit.buyerName || "",
+          sellerId: deposit.sellerId || "",
+          sellerName: store?.storeName || "",
+          storeId: deposit.storeId || "",
+          product: product ? {
+            productId: product.productId,
+            catalog: product.catalog,
+            category: product.category,
+            region: product.region,
+            name: product.name,
+            description: product.description,
+            marketPrice: product.marketPrice,
+            price: product.price,
+            discount: product.discount,
+            isActive: product.isActive,
+            isPromoted: product.isPromoted,
+            available: product.available,
+            sold: product.sold,
+            type: product.type,
+            createdAt: product.createdAt,
+            store: store ? {
+              storeId: store.storeId,
+              storeName: store.storeName,
+              isActive: store.isActive,
+              isApproved: store.isApproved,
+              approveStatus: store.approveStatus,
+              isPromoted: store.isPromoted,
+              type: store.type,
+              totalSales: store.totalSales,
+              positiveReviews: store.positiveReviews,
+              negativeReviews: store.negativeReviews,
+              registered: store.createdAt,
+              requestCount: store.requestCount,
+            } : null,
+          } : null,
+          codes: [],
+          amount: deposit.amount,
+          fee: deposit.fee,
+          totalAmount: deposit.totalCharged,
+          status: deposit.status,
+          type: "anonpurchase",
+          action: "buy",
+          isReviewed: false,
+          reviewType: null,
+          createdAt: "",
+          releasedAt: "",
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: null,
+        },
+      };
     }
 
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
@@ -181,7 +267,7 @@ export const walletsQueries = {
       order: {
         orderId: order.orderId,
         buyerId: order.buyerId,
-        buyerName: "gameketstore",
+        buyerName: order.buyerName || "",
         sellerId: order.sellerId,
         sellerName: store?.storeName || "",
         storeId: order.storeId,
@@ -216,7 +302,7 @@ export const walletsQueries = {
             requestCount: store.requestCount,
           } : null,
         } : null,
-        codes: order.status === "completed" ? order.codes.map(decrypt) : [],
+        codes: order.codes.map(decrypt),
         amount: order.amount,
         fee: order.fee,
         totalAmount: order.totalAmount,
@@ -292,7 +378,7 @@ export const walletsQueries = {
         order: {
           orderId: order.orderId,
           buyerId: order.buyerId,
-          buyerName: buyer?.username || "",
+          buyerName: order.buyerName || buyer?.username || "",
           sellerId: order.sellerId,
           sellerName: seller?.username || "",
           storeId: order.storeId,
@@ -327,7 +413,7 @@ export const walletsQueries = {
               requestCount: store.requestCount,
             } : null,
           } : null,
-          codes: action === "buy" ? order.codes.map(decrypt) : order.codes,
+          codes: order.codes.map(decrypt),
           amount: order.amount,
           fee: order.fee,
           totalAmount: order.totalAmount,
@@ -425,7 +511,7 @@ export const walletsQueries = {
         node: {
           orderId: order.orderId,
           buyerId: order.buyerId,
-          buyerName: buyerUser?.username || "",
+          buyerName: order.buyerName || buyerUser?.username || "",
           sellerId: order.sellerId,
           sellerName: sellerUser?.username || "",
           storeId: order.storeId,
@@ -460,7 +546,7 @@ export const walletsQueries = {
               requestCount: store.requestCount,
             } : null,
           } : null,
-          codes: action === "buy" ? order.codes.map(decrypt) : order.codes,
+          codes: order.codes.map(decrypt),
           amount: order.amount,
           fee: order.fee,
           totalAmount: order.totalAmount,
@@ -1096,6 +1182,7 @@ export const walletsMutations = {
     const order: Order = {
       orderId,
       buyerId: userId,
+      buyerName: user.username,
       sellerId: product.userId,
       storeId: product.storeId,
       productId,
@@ -1125,7 +1212,9 @@ export const walletsMutations = {
       order: {
         orderId: order.orderId,
         buyerId: order.buyerId,
+        buyerName: user.username,
         sellerId: order.sellerId,
+        sellerName: store?.storeName || "",
         storeId: order.storeId,
         product: {
           productId: product.productId,
@@ -1281,34 +1370,10 @@ export const walletsMutations = {
     const payId = String(paymentResponse.transaction?.txnid || "");
     const paymentLink = String(paymentResponse.paymentLink || "");
 
-    // Create order
     const orderId = randomBytes(36).toString("base64").replace(/[+/=]/g, "");
+    const buyerName = `Guest-${randomBytes(3).toString("hex")}`;
 
-    const order: Order = {
-      orderId,
-      buyerId: "anon-gameket-id",
-      sellerId: product.userId,
-      storeId: product.storeId,
-      productId,
-      buyerTransactionId: "",
-      sellerTransactionId: "",
-      codes: [],
-      quantity,
-      amount,
-      fee,
-      totalAmount,
-      status: "pending",
-      type: "anonpurchase",
-      isReviewed: false,
-      reviewType: null,
-      isReleased: false,
-      createdAt: now,
-      releasedAt,
-    };
-
-    await walletsDB.collection<Order>("Orders").insertOne(order);
-
-    // Create deposit record
+    // Create deposit record (order is created in webhook after payment completes)
     const depositRecord: Deposit = {
       userId: email,
       payId,
@@ -1321,6 +1386,11 @@ export const walletsMutations = {
       totalCharged: totalAmount,
       status: "pending",
       type: "codepurchase",
+      sellerId: product.userId,
+      storeId: product.storeId,
+      productId,
+      quantity,
+      buyerName,
     };
 
     await walletsDB.collection<Deposit>("Deposits").insertOne(depositRecord);
@@ -1330,12 +1400,12 @@ export const walletsMutations = {
       success: true,
       message: "Payment initiated",
       order: {
-        orderId: order.orderId,
-        buyerId: order.buyerId,
-        buyerName: "gameketstore",
-        sellerId: order.sellerId,
+        orderId,
+        buyerId: "anon-gameket-id",
+        buyerName,
+        sellerId: product.userId,
         sellerName: store.storeName,
-        storeId: order.storeId,
+        storeId: product.storeId,
         product: {
           productId: product.productId,
           catalog: product.catalog,
@@ -1368,16 +1438,16 @@ export const walletsMutations = {
           },
         },
         codes: [],
-        amount: order.amount,
-        fee: order.fee,
-        totalAmount: order.totalAmount,
-        status: order.status,
-        type: order.type,
+        amount,
+        fee,
+        totalAmount,
+        status: "pending",
+        type: "anonpurchase",
         action: "buy",
-        isReviewed: order.isReviewed,
-        reviewType: order.reviewType ?? null,
-        createdAt: order.createdAt,
-        releasedAt: order.releasedAt,
+        isReviewed: false,
+        reviewType: null,
+        createdAt: now,
+        releasedAt,
         store: {
           storeId: store.storeId,
           storeName: store.storeName,

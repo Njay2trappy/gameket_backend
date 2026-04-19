@@ -81,42 +81,33 @@ router.post("/webhook/deposit", async (req, res) => {
     }
   } else if (deposit.type === "codepurchase") {
     // --- Anonymous code purchase flow ---
-    const order = await walletsDB.collection<Order>("Orders").findOne({
-      orderId: deposit.orderId,
-      status: "pending",
-      type: "anonpurchase",
-    });
-
-    if (!order) {
-      res.status(404).json({ success: false, message: "Order not found" });
+    if (!deposit.orderId || !deposit.sellerId || !deposit.storeId || !deposit.productId || !deposit.quantity) {
+      res.status(400).json({ success: false, message: "Incomplete deposit data" });
       return;
     }
 
     if (status === "completed") {
       const catalogsDB = getCatalogsDB();
-      const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+      const product = await catalogsDB.collection<Product>("Products").findOne({ productId: deposit.productId });
 
-      if (!product || product.availableCodes.length < order.quantity) {
+      if (!product || product.availableCodes.length < deposit.quantity) {
         await walletsDB.collection<Deposit>("Deposits").updateOne(
           { payId: txnid },
-          { $set: { status: "failed" } }
-        );
-        await walletsDB.collection<Order>("Orders").updateOne(
-          { orderId: order.orderId },
           { $set: { status: "failed" } }
         );
         res.status(400).json({ success: false, message: "Product codes no longer available" });
         return;
       }
 
-      const quantity = order.quantity;
+      const quantity = deposit.quantity;
       const purchasedCodes = product.availableCodes.slice(0, quantity);
       const remainingCodes = product.availableCodes.slice(quantity);
       const now = new Date().toISOString();
+      const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
       // Move codes from available to sold
       await catalogsDB.collection<Product>("Products").updateOne(
-        { productId: order.productId },
+        { productId: deposit.productId },
         {
           $set: { availableCodes: remainingCodes },
           $push: { soldCodes: { $each: purchasedCodes } },
@@ -126,42 +117,56 @@ router.post("/webhook/deposit", async (req, res) => {
 
       // Update store total sales
       await catalogsDB.collection<Store>("Stores").updateOne(
-        { storeId: order.storeId },
+        { storeId: deposit.storeId },
         { $inc: { totalSales: quantity } }
       );
 
       // Credit seller's suspended balance
       await walletsDB.collection<Balance>("Balances").updateOne(
-        { userId: order.sellerId },
-        { $inc: { suspendedBalance: order.amount } }
+        { userId: deposit.sellerId },
+        { $inc: { suspendedBalance: deposit.amount } }
       );
 
       // Create seller transaction
       const sellerTransactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
 
       const sellerTransaction: Transaction = {
-        userId: order.sellerId,
+        userId: deposit.sellerId,
         id: sellerTransactionId,
         type: "SoldCodes",
         status: "pending",
         method: "balance",
-        amount: order.amount,
+        amount: deposit.amount,
         createdAt: now,
       };
 
       await walletsDB.collection<Transaction>("Transactions").insertOne(sellerTransaction);
 
-      // Update order with codes and transaction
-      await walletsDB.collection<Order>("Orders").updateOne(
-        { orderId: order.orderId },
-        {
-          $set: {
-            codes: purchasedCodes,
-            sellerTransactionId,
-            status: "completed",
-          },
-        }
-      );
+      // Create order now that payment is confirmed
+      const order: Order = {
+        orderId: deposit.orderId,
+        buyerId: "anon-gameket-id",
+        buyerName: deposit.buyerName || "Guest",
+        sellerId: deposit.sellerId,
+        storeId: deposit.storeId,
+        productId: deposit.productId,
+        buyerTransactionId: "",
+        sellerTransactionId,
+        codes: purchasedCodes,
+        quantity,
+        amount: deposit.amount,
+        fee: deposit.fee,
+        totalAmount: deposit.totalCharged,
+        status: "completed",
+        type: "anonpurchase",
+        isReviewed: false,
+        reviewType: null,
+        isReleased: false,
+        createdAt: now,
+        releasedAt,
+      };
+
+      await walletsDB.collection<Order>("Orders").insertOne(order);
 
       // Update deposit status
       await walletsDB.collection<Deposit>("Deposits").updateOne(
@@ -173,11 +178,6 @@ router.post("/webhook/deposit", async (req, res) => {
     } else {
       await walletsDB.collection<Deposit>("Deposits").updateOne(
         { payId: txnid },
-        { $set: { status: "failed" } }
-      );
-
-      await walletsDB.collection<Order>("Orders").updateOne(
-        { orderId: order.orderId },
         { $set: { status: "failed" } }
       );
 

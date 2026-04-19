@@ -50,6 +50,12 @@ export interface Deposit {
   totalCharged: number;
   status: string;
   type: string;
+  // codepurchase-specific fields
+  sellerId?: string;
+  storeId?: string;
+  productId?: string;
+  quantity?: number;
+  buyerName?: string;
 }
 
 export interface Review {
@@ -153,6 +159,7 @@ export interface VerificationRequest {
 export interface Order {
   orderId: string;
   buyerId: string;
+  buyerName: string;
   sellerId: string;
   storeId: string;
   productId: string;
