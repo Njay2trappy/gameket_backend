@@ -2018,6 +2018,11 @@ export const walletsMutations = {
       return { code: 403, success: false, message: "Only the store owner can refund this order", user, order: null, refundOffer: null };
     }
 
+    // No refunds for anonymous purchases
+    if (order.buyerId === "anon-gameket-id") {
+      return { code: 400, success: false, message: "Refunds are not available for guest purchases", user, order: null, refundOffer: null };
+    }
+
     // Cannot refund already released or refunded orders
     if (order.isReleased) {
       return { code: 400, success: false, message: "Cannot refund an already released order", user, order: null, refundOffer: null };
@@ -2064,11 +2069,18 @@ export const walletsMutations = {
         { $inc: { availableBalance: refundAmount } }
       );
 
-      // Deduct seller suspended balance
-      await walletsDB.collection<Balance>("Balances").updateOne(
-        { userId: order.sellerId },
-        { $inc: { suspendedBalance: -sellerDeduction } }
-      );
+      // Deduct seller from the correct balance depending on release status
+      if (order.isReleased) {
+        await walletsDB.collection<Balance>("Balances").updateOne(
+          { userId: order.sellerId },
+          { $inc: { availableBalance: -sellerDeduction } }
+        );
+      } else {
+        await walletsDB.collection<Balance>("Balances").updateOne(
+          { userId: order.sellerId },
+          { $inc: { suspendedBalance: -sellerDeduction } }
+        );
+      }
 
       // Decrement store totalSales and recalculate rank
       const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
@@ -2604,11 +2616,47 @@ export const walletsMutations = {
       { $inc: { availableBalance: offer.refundAmount } }
     );
 
-    // Deduct seller suspended balance
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: offer.sellerId },
-      { $inc: { suspendedBalance: -offer.sellerDeduction } }
+    // Deduct seller and release remaining funds immediately
+    const remainingAmount = parseFloat((order.amount - offer.sellerDeduction).toFixed(2));
+
+    if (order.isReleased) {
+      // Funds already in availableBalance, just deduct the refund portion
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: offer.sellerId },
+        { $inc: { availableBalance: -offer.sellerDeduction } }
+      );
+    } else {
+      // Deduct full amount from suspended, release remaining to available immediately
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: offer.sellerId },
+        {
+          $inc: {
+            suspendedBalance: -order.amount,
+            availableBalance: remainingAmount,
+          },
+        }
+      );
+    }
+
+    // Update seller transaction: adjust amount to what they actually receive, mark completed
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.sellerTransactionId },
+      { $set: { amount: remainingAmount, status: "completed" } }
     );
+
+    // Create a refund transaction for the buyer
+    const buyerRefundTxnId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+    const now = new Date().toISOString();
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne({
+      userId: offer.buyerId,
+      id: buyerRefundTxnId,
+      type: "PartialRefund",
+      status: "completed",
+      method: "balance",
+      amount: offer.refundAmount,
+      createdAt: now,
+    });
 
     // Decrement store totalSales by the refunded quantity
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
@@ -2631,10 +2679,10 @@ export const walletsMutations = {
       { $set: { status: "accepted" } }
     );
 
-    // Update order to reflect partial refund
+    // Update order to reflect partial refund and mark as released
     await walletsDB.collection<Order>("Orders").updateOne(
       { orderId: offer.orderId },
-      { $set: { status: "partially_refunded" } }
+      { $set: { status: "partially_refunded", isReleased: true } }
     );
 
     // If order was disputed, close the dispute
@@ -2681,7 +2729,7 @@ export const walletsMutations = {
           type: order.type,
           action: "buy",
           isReviewed: order.isReviewed,
-          isReleased: order.isReleased,
+          isReleased: true,
           reviewType: order.reviewType ?? null,
           disputeReason: order.disputeReason ?? null,
           createdAt: order.createdAt,
@@ -2701,6 +2749,7 @@ export const walletsMutations = {
             requestCount: store.requestCount,
           } : null,
           transaction: null,
+          refundOffer: null,
         },
       },
     };
