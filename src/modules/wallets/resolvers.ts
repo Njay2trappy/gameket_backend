@@ -224,6 +224,7 @@ export const walletsQueries = {
         type: order.type,
         action: "buy",
         isReviewed: order.isReviewed,
+        reviewType: order.reviewType ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: store ? {
@@ -334,6 +335,7 @@ export const walletsQueries = {
           type: order.type,
           action,
           isReviewed: order.isReviewed,
+          reviewType: order.reviewType ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -466,6 +468,7 @@ export const walletsQueries = {
           type: order.type,
           action,
           isReviewed: order.isReviewed,
+          reviewType: order.reviewType ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -846,6 +849,7 @@ export const walletsMutations = {
       status: "completed",
       type: "userpurchase",
       isReviewed: false,
+      reviewType: null,
       isReleased: false,
       createdAt: now,
       releasedAt,
@@ -902,6 +906,7 @@ export const walletsMutations = {
         type: order.type,
         action: "buy",
         isReviewed: order.isReviewed,
+        reviewType: order.reviewType ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: updatedStore ? {
@@ -1035,6 +1040,7 @@ export const walletsMutations = {
       status: "pending",
       type: "anonpurchase",
       isReviewed: false,
+      reviewType: null,
       isReleased: false,
       createdAt: now,
       releasedAt,
@@ -1109,6 +1115,7 @@ export const walletsMutations = {
         type: order.type,
         action: "buy",
         isReviewed: order.isReviewed,
+        reviewType: order.reviewType ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: {
@@ -1239,7 +1246,7 @@ export const walletsMutations = {
     // Mark order as reviewed
     await walletsDB.collection<Order>("Orders").updateOne(
       { orderId },
-      { $set: { isReviewed: true } }
+      { $set: { isReviewed: true, reviewType: type } }
     );
 
     // Update store review counts and push review

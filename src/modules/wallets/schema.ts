@@ -53,6 +53,7 @@ export const walletsTypeDefs = `#graphql
     type: OrderType!
     action: OrderAction!
     isReviewed: Boolean!
+    reviewType: ReviewType
     createdAt: String!
     releasedAt: String!
     store: StoreDetails

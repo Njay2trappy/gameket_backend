@@ -166,6 +166,7 @@ export interface Order {
   status: string;
   type: string;
   isReviewed: boolean;
+  reviewType: string | null;
   isReleased: boolean;
   createdAt: string;
   releasedAt: string;
