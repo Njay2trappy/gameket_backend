@@ -84,9 +84,6 @@ async function main() {
               email: adminDecoded.email.trim().toLowerCase(),
             });
 
-            if (adminUser?.isSuspended) {
-              return { user: null, authError: "Account is suspended" };
-            }
             if (adminUser && !adminUser.isActive) {
               return { user: null, authError: "Account is deactivated" };
             }
@@ -94,7 +91,7 @@ async function main() {
             const resolvedUserId = adminUser?.id ?? adminDecoded.adminId;
 
             return {
-              user: { userId: resolvedUserId, email: adminDecoded.email, role: "admin" as const },
+              user: { userId: resolvedUserId, email: adminDecoded.email, role: "admin" as const, isSuspended: adminUser?.isSuspended ?? false },
               authError: null,
             };
           } catch (err) {

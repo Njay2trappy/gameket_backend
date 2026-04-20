@@ -1014,7 +1014,7 @@ export const adminMutations = {
       return { code: 404, success: false, message: "User not found", user: null };
     }
 
-    if (existingUser.isSuspended && !existingUser.isActive) {
+    if (existingUser.isSuspended) {
       return { code: 200, success: true, message: "User is already suspended", user: existingUser };
     }
 
@@ -1074,7 +1074,7 @@ export const adminMutations = {
       return { code: 404, success: false, message: "User not found", user: null };
     }
 
-    if (!existingUser.isSuspended && existingUser.isActive) {
+    if (!existingUser.isSuspended) {
       return { code: 200, success: true, message: "User is already active", user: existingUser };
     }
 

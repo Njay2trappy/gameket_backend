@@ -222,8 +222,8 @@ export const usersMutations = {
       return { code: 403, success: false, message: "Account must be verified to subscribe to premium", premium: null };
     }
 
-    if (!user.isActive) {
-      return { code: 403, success: false, message: "Account is not active", premium: null };
+    if (user.isSuspended) {
+      return { code: 403, success: false, message: "Your account is suspended. You cannot subscribe to premium.", premium: null };
     }
 
     const balance = await walletsDB.collection<Balance>("Balances").findOne({ userId });

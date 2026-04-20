@@ -1920,6 +1920,10 @@ export const catalogsMutations = {
     const db = getDB();
     const catalogsDB = getCatalogsDB();
 
+    if (context.user.isSuspended) {
+      return { code: 403, success: false, message: "Your account is suspended. You cannot enable products." };
+    }
+
     const user = await db.collection<User>("users").findOne({ id: userId });
     if (!user || !user.isStore) {
       return { code: 403, success: false, message: "Only sellers can enable products" };
@@ -1933,6 +1937,10 @@ export const catalogsMutations = {
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
     if (!store || !store.isActive) {
       return { code: 403, success: false, message: "Your store is not active. Products cannot be enabled while your store is inactive" };
+    }
+
+    if (product.available <= 0) {
+      return { code: 400, success: false, message: "Product has no available codes and cannot be enabled" };
     }
 
     if (product.isActive) {
