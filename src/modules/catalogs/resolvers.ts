@@ -1069,6 +1069,37 @@ export const catalogsQueries = {
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ userId: product.userId });
 
+    // Resolve product-specific reviews
+    const walletsDB = getWalletsDB();
+    const db = getDB();
+    let productReviews: { reviewerName: string; orderId: string; type: string; review: string; date: string }[] = [];
+
+    if (store && store.reviews?.length) {
+      const productOrders = await walletsDB
+        .collection<Order>("Orders")
+        .find({ productId: product.productId })
+        .toArray();
+      const productOrderIds = new Set(productOrders.map((o) => o.orderId));
+
+      const filtered = store.reviews.filter((r) => productOrderIds.has(r.orderId));
+
+      if (filtered.length) {
+        const reviewerIds = [...new Set(filtered.map((r) => r.reviewerId))];
+        const reviewers = await db.collection<User>("users").find({ id: { $in: reviewerIds } }).toArray();
+        const reviewerMap = new Map(reviewers.map((u) => [u.id, u.username]));
+
+        productReviews = filtered
+          .map((r) => ({
+            reviewerName: reviewerMap.get(r.reviewerId) ?? "Unknown",
+            orderId: r.orderId,
+            type: r.type,
+            review: r.review,
+            date: r.date,
+          }))
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      }
+    }
+
     return {
       code: 200,
       success: true,
@@ -1089,6 +1120,7 @@ export const catalogsQueries = {
         sold: product.sold,
         type: product.type,
         createdAt: product.createdAt,
+        reviews: productReviews,
         store: store
           ? {
               storeId: store.storeId,

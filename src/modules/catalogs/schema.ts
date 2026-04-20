@@ -199,6 +199,7 @@ export const catalogsTypeDefs = `#graphql
     type: ProductType!
     createdAt: String!
     store: StoreDetails
+    reviews: [ReviewDetails!]
   }
 
   type GetProductsEdge {
