@@ -2,6 +2,7 @@ import { authTypeDefs } from "./modules/auth/schema.js";
 import { usersTypeDefs } from "./modules/users/schema.js";
 import { walletsTypeDefs } from "./modules/wallets/schema.js";
 import { catalogsTypeDefs } from "./modules/catalogs/schema.js";
+import { adminTypeDefs } from "./modules/admin/schema.js";
 
 const baseTypeDefs = `#graphql
   scalar Date
@@ -12,6 +13,7 @@ const baseTypeDefs = `#graphql
     email: String!
     country: String!
     isActive: Boolean!
+    isSuspended: Boolean!
     isVerified: Boolean!
     isPremium: Boolean!
     twoFactorAuth: Boolean!
@@ -35,5 +37,5 @@ const baseTypeDefs = `#graphql
   }
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, usersTypeDefs, walletsTypeDefs, catalogsTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, usersTypeDefs, walletsTypeDefs, catalogsTypeDefs, adminTypeDefs];
 

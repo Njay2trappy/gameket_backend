@@ -95,6 +95,7 @@ export const authMutations = {
       email,
       country,
       isActive: true,
+      isSuspended: false,
       isVerified: false,
       isPremium: false,
       rank: 1,
@@ -196,6 +197,10 @@ export const authMutations = {
       return { code: 401, success: false, message: "Invalid email or password", token: null, user: null };
     }
 
+    if (user.isSuspended) {
+      return { code: 403, success: false, message: "Account is suspended", token: null, user: null };
+    }
+
     if (!user.isActive) {
       return { code: 403, success: false, message: "Account is deactivated", token: null, user: null };
     }
@@ -256,6 +261,10 @@ export const authMutations = {
       const user = await users.findOne({ id: existingAccount.userId });
       if (!user) {
         return { code: 401, success: false, message: "Account not found", token: null, user: null };
+      }
+
+      if (user.isSuspended) {
+        return { code: 403, success: false, message: "Account is suspended", token: null, user: null };
       }
 
       if (!user.isActive) {
@@ -325,6 +334,7 @@ export const authMutations = {
       email,
       country,
       isActive: true,
+      isSuspended: false,
       isVerified: true,
       isPremium: false,
       rank: 1,

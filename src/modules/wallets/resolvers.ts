@@ -108,6 +108,10 @@ export const walletsQueries = {
       });
     }
 
+    if (context.user.role === "admin") {
+      return { code: 403, success: false, message: "Admin accounts cannot buy products", order: null, transaction: null };
+    }
+
     const { userId } = context.user;
     const db = getDB();
     const walletsDB = getWalletsDB();

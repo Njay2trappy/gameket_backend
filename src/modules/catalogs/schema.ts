@@ -8,6 +8,7 @@ export const catalogsTypeDefs = `#graphql
     basic
     premium
     merchant
+    official
   }
 
   enum ApproveStatus {
@@ -520,7 +521,7 @@ export const catalogsTypeDefs = `#graphql
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!
     advertiseStore(input: AdvertiseStoreInput!): AdvertiseStoreResponse!
     requestStoreAccess(input: RequestStoreAccessInput!): RequestStoreAccessResponse!
-    adminAuthorizeStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
+    adminAuthorizeStore(storeId: ID!, superkey: String, token: String): AdminAuthorizeStoreResponse!
     adminRejectStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
     uploadImage(image: String!): UploadImageResponse!
     blacklistUser(userId: ID!): BlacklistResponse!

@@ -4,6 +4,7 @@ export interface User {
   email: string;
   country: string;
   isActive: boolean;
+  isSuspended: boolean;
   isVerified: boolean;
   isPremium: boolean;
   rank: number;
@@ -22,6 +23,19 @@ export interface Account {
   tokenVersion: number;
   otp: string | null;
   otpExpiresAt: string | null;
+}
+
+export interface Support {
+  supportId: string;
+  email: string;
+  username: string;
+  password: string;
+  isActive: boolean;
+  isSuspended: boolean;
+  hasSupportPrivileges: boolean;
+  tokenVersion: number;
+  createdAt: string;
+  lastLogin: string | null;
 }
 
 export interface PaymentMethod {

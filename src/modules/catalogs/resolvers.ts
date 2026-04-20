@@ -7,6 +7,7 @@ import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Tra
 import type { Context } from "../../index.js";
 import countryData from "../../../data/country.json";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
@@ -2352,43 +2353,83 @@ export const catalogsMutations = {
 
   adminAuthorizeStore: async (
     _: unknown,
-    { storeId, superkey }: { storeId: string; superkey: string }
+    { storeId, superkey, token }: { storeId: string; superkey?: string; token?: string }
   ) => {
-    // Rate limiting: track by storeId
-    const now = Date.now();
-    const attempt = adminAttempts.get(storeId);
-    if (attempt) {
-      if (attempt.lockedUntil > now) {
-        const minutesLeft = Math.ceil((attempt.lockedUntil - now) / 60000);
-        return { code: 429, success: false, message: `Too many attempts. Try again in ${minutesLeft} minute(s)` };
-      }
-      if (attempt.lockedUntil <= now && attempt.count >= MAX_ATTEMPTS) {
-        adminAttempts.delete(storeId);
-      }
-    }
-
     const db = getDB();
     const catalogsDB = getCatalogsDB();
 
-    // Retrieve the stored bcrypt hash of the superkey
-    const adminDoc = await db.collection("Admin").findOne({ key: "superkey" });
-    if (!adminDoc) {
-      return { code: 500, success: false, message: "Server configuration error" };
-    }
+    const trimmedSuperkey = superkey?.trim();
+    const trimmedToken = token?.trim();
+    let isAuthorized = false;
 
-    const isValid = await bcrypt.compare(superkey, adminDoc.value);
-    if (!isValid) {
-      const current = adminAttempts.get(storeId) || { count: 0, lockedUntil: 0 };
-      current.count += 1;
-      if (current.count >= MAX_ATTEMPTS) {
-        current.lockedUntil = now + LOCKOUT_DURATION;
+    // Prefer superkey path when provided
+    if (trimmedSuperkey) {
+      // Rate limiting: track by storeId
+      const now = Date.now();
+      const attempt = adminAttempts.get(storeId);
+      if (attempt) {
+        if (attempt.lockedUntil > now) {
+          const minutesLeft = Math.ceil((attempt.lockedUntil - now) / 60000);
+          return { code: 429, success: false, message: `Too many attempts. Try again in ${minutesLeft} minute(s)` };
+        }
+        if (attempt.lockedUntil <= now && attempt.count >= MAX_ATTEMPTS) {
+          adminAttempts.delete(storeId);
+        }
       }
-      adminAttempts.set(storeId, current);
-      return { code: 403, success: false, message: "Invalid superkey" };
+
+      // Retrieve the stored bcrypt hash of the superkey
+      const superkeyDoc = await db.collection("Admin").findOne({ key: "superkey" });
+      if (!superkeyDoc) {
+        return { code: 500, success: false, message: "Server configuration error" };
+      }
+
+      const isValid = await bcrypt.compare(trimmedSuperkey, superkeyDoc.value);
+      if (!isValid) {
+        const current = adminAttempts.get(storeId) || { count: 0, lockedUntil: 0 };
+        current.count += 1;
+        if (current.count >= MAX_ATTEMPTS) {
+          current.lockedUntil = now + LOCKOUT_DURATION;
+        }
+        adminAttempts.set(storeId, current);
+        return { code: 403, success: false, message: "Invalid superkey" };
+      }
+
+      adminAttempts.delete(storeId);
+      isAuthorized = true;
+    } else if (trimmedToken) {
+      // Token path for admin auth when superkey is not supplied
+      const adminSecret = process.env.ADMIN_JWT_SECRET;
+      if (!adminSecret) {
+        return { code: 500, success: false, message: "Server configuration error" };
+      }
+
+      try {
+        const decoded = jwt.verify(trimmedToken, adminSecret) as {
+          adminId: string;
+          role: "admin";
+          tokenVersion: number;
+        };
+
+        if (decoded.role !== "admin") {
+          return { code: 403, success: false, message: "Invalid admin token" };
+        }
+
+        const adminAuthDoc = await db.collection("Admin").findOne({ key: "admin" });
+        if (!adminAuthDoc || adminAuthDoc.tokenVersion !== decoded.tokenVersion) {
+          return { code: 403, success: false, message: "Admin token expired. Please login again" };
+        }
+
+        isAuthorized = true;
+      } catch {
+        return { code: 403, success: false, message: "Invalid admin token" };
+      }
+    } else {
+      return { code: 400, success: false, message: "Provide either superkey or token" };
     }
 
-    // Clear attempts on success
-    adminAttempts.delete(storeId);
+    if (!isAuthorized) {
+      return { code: 403, success: false, message: "Unauthorized" };
+    }
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId });
     if (!store) {

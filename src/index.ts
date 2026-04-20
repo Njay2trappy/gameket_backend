@@ -9,7 +9,7 @@ import jwt from "jsonwebtoken";
 import { typeDefs } from "./schema.js";
 import { resolvers } from "./resolvers.js";
 import { connectDB, closeDB, getDB, getWalletsDB } from "./db.js";
-import type { Account } from "./types.js";
+import type { Account, User } from "./types.js";
 import depositRouter from "./rest/deposit.js";
 import { startCronJobs } from "./cron.js";
 
@@ -17,7 +17,7 @@ const PORT = Number(process.env.PORT) || 4000;
 const IS_PROD = process.env.NODE_ENV === "production";
 
 export interface Context {
-  user: { userId: string; email: string } | null;
+  user: { userId: string; email: string; role?: "admin" } | null;
   authError: string | null;
 }
 
@@ -46,7 +46,68 @@ async function main() {
     express.json(),
     expressMiddleware(server, {
       context: async ({ req }) => {
-        const auth = req.headers.authorization || "";
+        const adminAuthHeader = req.headers["adminauthorization"];
+        const authHeader = req.headers.authorization;
+        const adminAuth = Array.isArray(adminAuthHeader) ? adminAuthHeader[0] : (adminAuthHeader || "");
+        const auth = Array.isArray(authHeader) ? authHeader[0] : (authHeader || "");
+
+        if (adminAuth) {
+          if (!adminAuth.startsWith("Bearer ")) {
+            return { user: null, authError: "Invalid AdminAuthorization token format" };
+          }
+
+          const token = adminAuth.slice(7);
+          try {
+            const adminSecret = process.env.ADMIN_JWT_SECRET;
+            if (!adminSecret) {
+              throw new Error("Server configuration error");
+            }
+
+            const adminDecoded = jwt.verify(token, adminSecret) as {
+              adminId: string;
+              email: string;
+              role: "admin";
+              tokenVersion: number;
+            };
+
+            if (adminDecoded.role !== "admin") {
+              return { user: null, authError: "Invalid admin authentication token" };
+            }
+
+            const db = getDB();
+            const adminDoc = await db.collection("Admin").findOne({ key: "admin" });
+            if (!adminDoc || adminDoc.tokenVersion !== adminDecoded.tokenVersion) {
+              return { user: null, authError: "Admin session expired. Please login again" };
+            }
+
+            const adminUser = await db.collection<User>("users").findOne({
+              email: adminDecoded.email.trim().toLowerCase(),
+            });
+
+            if (adminUser?.isSuspended) {
+              return { user: null, authError: "Account is suspended" };
+            }
+            if (adminUser && !adminUser.isActive) {
+              return { user: null, authError: "Account is deactivated" };
+            }
+
+            const resolvedUserId = adminUser?.id ?? adminDecoded.adminId;
+
+            return {
+              user: { userId: resolvedUserId, email: adminDecoded.email, role: "admin" as const },
+              authError: null,
+            };
+          } catch (err) {
+            if (err instanceof jwt.TokenExpiredError) {
+              return { user: null, authError: "Admin authentication token has expired. Please login again" };
+            }
+            if (err instanceof jwt.JsonWebTokenError) {
+              return { user: null, authError: "Invalid admin authentication token" };
+            }
+            return { user: null, authError: "Admin authentication failed" };
+          }
+        }
+
         if (!auth.startsWith("Bearer ")) {
           return { user: null, authError: "No authentication token provided" };
         }
@@ -66,6 +127,17 @@ async function main() {
 
           if (!account || account.tokenVersion !== decoded.tokenVersion) {
             return { user: null, authError: "Session expired. Please login again" };
+          }
+
+          const user = await db.collection<User>("users").findOne({ id: decoded.userId });
+          if (!user) {
+            return { user: null, authError: "Authentication failed" };
+          }
+          if (user.isSuspended) {
+            return { user: null, authError: "Account is suspended" };
+          }
+          if (!user.isActive) {
+            return { user: null, authError: "Account is deactivated" };
           }
 
           return { user: { userId: decoded.userId, email: decoded.email }, authError: null };

@@ -3,6 +3,7 @@ import { authQueries, authMutations } from "./modules/auth/resolvers.js";
 import { usersQueries, usersMutations, userFieldResolvers } from "./modules/users/resolvers.js";
 import { walletsQueries, walletsMutations } from "./modules/wallets/resolvers.js";
 import { catalogsQueries, catalogsMutations } from "./modules/catalogs/resolvers.js";
+import { adminQueries, adminMutations } from "./modules/admin/resolvers.js";
 
 const DateScalar = new GraphQLScalarType({
   name: "Date",
@@ -38,6 +39,7 @@ export const resolvers = {
     ...usersQueries,
     ...walletsQueries,
     ...catalogsQueries,
+    ...adminQueries,
   },
 
   Mutation: {
@@ -45,6 +47,7 @@ export const resolvers = {
     ...usersMutations,
     ...walletsMutations,
     ...catalogsMutations,
+    ...adminMutations,
   },
 };
 

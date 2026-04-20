@@ -6,6 +6,10 @@ import type { User, Account, Store, Balance, Premium, Transaction, Product } fro
 import type { Context } from "../../index.js";
 
 export const userFieldResolvers = {
+  isSuspended: (parent: Record<string, unknown>) => {
+    return Boolean(parent.isSuspended);
+  },
+
   twoFactorAuth: async (parent: Record<string, unknown>) => {
     if ("twoFactorAuth" in parent) return parent.twoFactorAuth;
     const db = getDB();
