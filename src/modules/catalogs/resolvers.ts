@@ -1502,8 +1502,8 @@ export const catalogsMutations = {
     if (description.length === 0) {
       return { code: 400, success: false, message: "Description is required", product: null };
     }
-    if (description.length > 500) {
-      return { code: 400, success: false, message: "Description must be at most 500 characters", product: null };
+    if (description.length > 1500) {
+      return { code: 400, success: false, message: "Description must be at most 1500 characters", product: null };
     }
     if (marketPrice <= 0) {
       return { code: 400, success: false, message: "Market price must be greater than 0", product: null };
@@ -1746,8 +1746,8 @@ export const catalogsMutations = {
       if (description.length === 0) {
         return { code: 400, success: false, message: "Description cannot be empty", product: null };
       }
-      if (description.length > 500) {
-        return { code: 400, success: false, message: "Description must be at most 500 characters", product: null };
+      if (description.length > 1500) {
+        return { code: 400, success: false, message: "Description must be at most 1500 characters", product: null };
       }
       updates.description = description;
     }
