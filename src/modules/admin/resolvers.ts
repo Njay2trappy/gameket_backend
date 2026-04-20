@@ -752,6 +752,95 @@ export const adminQueries = {
     };
   },
 
+  AdmingetProducts: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const catalogsDB = getCatalogsDB();
+
+    const officialStore = await catalogsDB.collection<Store>("Stores").findOne({ type: "official" });
+    if (!officialStore) {
+      return {
+        code: 404,
+        success: false,
+        message: "Official store not found",
+        products: { edges: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null, fetchedCount: 0, remainingCount: 0 } },
+      };
+    }
+
+    const allProducts = await catalogsDB
+      .collection<Product>("Products")
+      .find({ storeId: officialStore.storeId })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allProducts.length;
+    const defaultPageSize = 50;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allProducts.slice(start, end);
+
+    const edges = sliced.map((p, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        productId: p.productId,
+        catalog: p.catalog,
+        category: p.category,
+        region: p.region,
+        name: p.name,
+        description: p.description,
+        marketPrice: p.marketPrice,
+        price: p.price,
+        discount: p.discount,
+        isActive: p.isActive,
+        isPromoted: p.isPromoted,
+        available: p.available,
+        sold: p.sold,
+        type: p.type,
+        createdAt: p.createdAt,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} official product(s) found`,
+      products: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
   AdmingetDisputes: async (
     _: unknown,
     { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
