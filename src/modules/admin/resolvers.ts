@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import type { User, Store, Premium, Transaction, Product, Order, Account, VerificationRequest, Support, Balance, Dispute, DisputeMessage } from "../../types.js";
 import type { Context } from "../../index.js";
-import { catalogsMutations } from "../catalogs/resolvers.js";
+import { catalogsMutations, catalogsQueries } from "../catalogs/resolvers.js";
 
 const MAX_ADMIN_ATTEMPTS = 5;
 const ADMIN_LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
@@ -839,6 +839,19 @@ export const adminQueries = {
         },
       },
     };
+  },
+
+  AdmingetProductCodes: async (
+    _: unknown,
+    { productId, first, after, last, before }: { productId: string; first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+    return catalogsQueries.viewProductCodes(_, { productId, first, after, last, before }, context);
   },
 
   AdmingetDisputes: async (

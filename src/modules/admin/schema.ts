@@ -276,6 +276,14 @@ export const adminTypeDefs = `#graphql
     products: AdminProductConnection!
   }
 
+  type AdmingetProductCodesResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    availableCodes: CodeConnection
+    soldCodes: CodeConnection
+  }
+
   extend type Query {
     adminGetDetails(filter: AdminStatsFilter): AdminGetDetailsResponse!
     AdmingetTransactions(type: String, first: Int, after: String, last: Int, before: String): AdminGetTransactionsResponse!
@@ -289,6 +297,7 @@ export const adminTypeDefs = `#graphql
     AdmingetOrders(status: String, first: Int, after: String, last: Int, before: String): AdmingetOrdersResponse!
     AdmingetPremiumUsers(first: Int, after: String, last: Int, before: String): AdmingetPremiumUsersResponse!
     AdmingetProducts(first: Int, after: String, last: Int, before: String): AdmingetProductsResponse!
+    AdmingetProductCodes(productId: ID!, first: Int, after: String, last: Int, before: String): AdmingetProductCodesResponse!
   }
 
   extend type Mutation {
