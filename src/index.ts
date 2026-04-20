@@ -17,7 +17,7 @@ const PORT = Number(process.env.PORT) || 4000;
 const IS_PROD = process.env.NODE_ENV === "production";
 
 export interface Context {
-  user: { userId: string; email: string; role?: "admin" } | null;
+  user: { userId: string; email: string; role?: "admin"; isSuspended?: boolean } | null;
   authError: string | null;
 }
 
@@ -133,14 +133,11 @@ async function main() {
           if (!user) {
             return { user: null, authError: "Authentication failed" };
           }
-          if (user.isSuspended) {
-            return { user: null, authError: "Account is suspended" };
-          }
-          if (!user.isActive) {
+          if (!user.isActive && !user.isSuspended) {
             return { user: null, authError: "Account is deactivated" };
           }
 
-          return { user: { userId: decoded.userId, email: decoded.email }, authError: null };
+          return { user: { userId: decoded.userId, email: decoded.email, isSuspended: user.isSuspended ?? false }, authError: null };
         } catch (err) {
           if (err instanceof jwt.TokenExpiredError) {
             return { user: null, authError: "Authentication token has expired. Please login again" };

@@ -1355,6 +1355,10 @@ export const walletsMutations = {
     const { userId } = context.user;
     const { amount } = input;
 
+    if (context.user.isSuspended) {
+      return { code: 403, success: false, message: "Your account is suspended. You cannot make deposits.", deposit: null, payId: null, paymentLink: null };
+    }
+
     if (amount <= 0) {
       return { code: 400, success: false, message: "Amount must be greater than 0", deposit: null, payId: null, paymentLink: null };
     }
@@ -1530,6 +1534,10 @@ export const walletsMutations = {
     }
 
     const { userId } = context.user;
+
+    if (context.user.isSuspended) {
+      return { code: 403, success: false, message: "Your account is suspended. You cannot make purchases.", order: null, transaction: null };
+    }
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
       return { code: 400, success: false, message: "Quantity must be a positive integer", order: null, transaction: null };
