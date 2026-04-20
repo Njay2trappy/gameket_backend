@@ -2495,19 +2495,59 @@ export const catalogsMutations = {
 
   adminRejectStore: async (
     _: unknown,
-    { storeId, superkey }: { storeId: string; superkey: string }
+    { storeId, superkey, token }: { storeId: string; superkey?: string; token?: string }
   ) => {
     const db = getDB();
     const catalogsDB = getCatalogsDB();
 
-    const adminDoc = await db.collection("Admin").findOne({ key: "superkey" });
-    if (!adminDoc) {
-      return { code: 500, success: false, message: "Server configuration error" };
+    const trimmedSuperkey = superkey?.trim();
+    const trimmedToken = token?.trim();
+    let isAuthorized = false;
+
+    if (trimmedSuperkey) {
+      const adminDoc = await db.collection("Admin").findOne({ key: "superkey" });
+      if (!adminDoc) {
+        return { code: 500, success: false, message: "Server configuration error" };
+      }
+
+      const isValid = await bcrypt.compare(trimmedSuperkey, adminDoc.value);
+      if (!isValid) {
+        return { code: 403, success: false, message: "Invalid superkey" };
+      }
+
+      isAuthorized = true;
+    } else if (trimmedToken) {
+      const adminSecret = process.env.ADMIN_JWT_SECRET;
+      if (!adminSecret) {
+        return { code: 500, success: false, message: "Server configuration error" };
+      }
+
+      try {
+        const decoded = jwt.verify(trimmedToken, adminSecret) as {
+          adminId: string;
+          role: "admin";
+          tokenVersion: number;
+        };
+
+        if (decoded.role !== "admin") {
+          return { code: 403, success: false, message: "Invalid admin token" };
+        }
+
+        const adminAuthDoc = await db.collection("Admin").findOne({ key: "admin" });
+        if (!adminAuthDoc || adminAuthDoc.tokenVersion !== decoded.tokenVersion) {
+          return { code: 403, success: false, message: "Admin token expired. Please login again" };
+        }
+
+        isAuthorized = true;
+      } catch {
+        return { code: 403, success: false, message: "Invalid admin token" };
+      }
+    } else {
+      return { code: 400, success: false, message: "Provide either superkey or token" };
     }
 
-    const isValid = await bcrypt.compare(superkey, adminDoc.value);
-    if (!isValid) {
-      return { code: 403, success: false, message: "Invalid superkey" };
+    if (!isAuthorized) {
+      return { code: 403, success: false, message: "Unauthorized" };
     }
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId });

@@ -523,7 +523,7 @@ export const catalogsTypeDefs = `#graphql
     advertiseStore(input: AdvertiseStoreInput!): AdvertiseStoreResponse!
     requestStoreAccess(input: RequestStoreAccessInput!): RequestStoreAccessResponse!
     adminAuthorizeStore(storeId: ID!, superkey: String, token: String): AdminAuthorizeStoreResponse!
-    adminRejectStore(storeId: ID!, superkey: String!): AdminAuthorizeStoreResponse!
+    adminRejectStore(storeId: ID!, superkey: String, token: String): AdminAuthorizeStoreResponse!
     uploadImage(image: String!): UploadImageResponse!
     blacklistUser(userId: ID!): BlacklistResponse!
     delistUser(userId: ID!): BlacklistResponse!
