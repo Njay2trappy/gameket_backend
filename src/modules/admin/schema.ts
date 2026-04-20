@@ -202,6 +202,23 @@ export const adminTypeDefs = `#graphql
     disputes: DisputeConnection!
   }
 
+  type AdminOrderEdge {
+    cursor: String!
+    node: OrderDetails!
+  }
+
+  type AdminOrderConnection {
+    edges: [AdminOrderEdge!]!
+    pageInfo: AdminPageInfo!
+  }
+
+  type AdmingetOrdersResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    orders: AdminOrderConnection!
+  }
+
   extend type Query {
     adminGetDetails(filter: AdminStatsFilter): AdminGetDetailsResponse!
     AdmingetTransactions(type: String, first: Int, after: String, last: Int, before: String): AdminGetTransactionsResponse!
@@ -212,6 +229,7 @@ export const adminTypeDefs = `#graphql
     AdmingetSuspendedUSers(first: Int, after: String, last: Int, before: String): AdmingetSuspendedUSersResponse!
     AdmingetSupports(first: Int, after: String, last: Int, before: String): AdmingetSupportsResponse!
     AdmingetDisputes(first: Int, after: String, last: Int, before: String): AdmingetDisputesResponse!
+    AdmingetOrders(status: String, first: Int, after: String, last: Int, before: String): AdmingetOrdersResponse!
   }
 
   extend type Mutation {

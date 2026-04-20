@@ -518,6 +518,167 @@ export const adminQueries = {
     };
   },
 
+  AdmingetOrders: async (
+    _: unknown,
+    { status, first, after, last, before }: { status?: string; first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const query = status ? { status } : {};
+
+    const allOrders = await walletsDB
+      .collection<Order>("Orders")
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allOrders.length;
+    const defaultPageSize = 50;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allOrders.slice(start, end);
+
+    const productIds = [...new Set(sliced.map((o) => o.productId))];
+    const storeIds = [...new Set(sliced.map((o) => o.storeId))];
+    const userIds = [...new Set(sliced.flatMap((o) => [o.buyerId, o.sellerId]))];
+
+    const [products, stores, users] = await Promise.all([
+      catalogsDB.collection<Product>("Products").find({ productId: { $in: productIds } }).toArray(),
+      catalogsDB.collection<Store>("Stores").find({ storeId: { $in: storeIds } }).toArray(),
+      db.collection<User>("users").find({ id: { $in: userIds } }).toArray(),
+    ]);
+
+    const productMap = new Map(products.map((p) => [p.productId, p]));
+    const storeMap = new Map(stores.map((s) => [s.storeId, s]));
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const edges = sliced.map((order, i) => {
+      const product = productMap.get(order.productId);
+      const store = storeMap.get(order.storeId);
+      const buyer = userMap.get(order.buyerId);
+      const seller = userMap.get(order.sellerId);
+
+      return {
+        cursor: encodeCursor(start + i),
+        node: {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName || buyer?.username || "",
+          sellerId: order.sellerId,
+          sellerName: seller?.username || "",
+          storeId: order.storeId,
+          product: product
+            ? {
+                productId: product.productId,
+                catalog: product.catalog,
+                category: product.category,
+                region: product.region,
+                name: product.name,
+                description: product.description,
+                marketPrice: product.marketPrice,
+                price: product.price,
+                discount: product.discount,
+                isActive: product.isActive,
+                isPromoted: product.isPromoted,
+                available: product.available,
+                sold: product.sold,
+                type: product.type,
+                createdAt: product.createdAt,
+                store: store
+                  ? {
+                      storeId: store.storeId,
+                      storeName: store.storeName,
+                      isActive: store.isActive,
+                      isApproved: store.isApproved,
+                      approveStatus: store.approveStatus,
+                      isPromoted: store.isPromoted,
+                      type: store.type,
+                      totalSales: store.totalSales,
+                      positiveReviews: store.positiveReviews,
+                      negativeReviews: store.negativeReviews,
+                      registered: store.createdAt,
+                      requestCount: store.requestCount ?? 0,
+                    }
+                  : null,
+              }
+            : null,
+          codes: [],
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: order.status,
+          type: order.type,
+          action: "buy",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store
+            ? {
+                storeId: store.storeId,
+                storeName: store.storeName,
+                isActive: store.isActive,
+                isApproved: store.isApproved,
+                approveStatus: store.approveStatus,
+                isPromoted: store.isPromoted,
+                type: store.type,
+                totalSales: store.totalSales,
+                positiveReviews: store.positiveReviews,
+                negativeReviews: store.negativeReviews,
+                registered: store.createdAt,
+                requestCount: store.requestCount ?? 0,
+              }
+            : null,
+          transaction: null,
+          refundOffer: null,
+        },
+      };
+    });
+
+    return {
+      code: 200,
+      success: true,
+      message: status ? `${total} order(s) found with status "${status}"` : `${total} order(s) found`,
+      orders: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
   AdmingetDisputes: async (
     _: unknown,
     { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
@@ -871,6 +1032,19 @@ export const adminMutations = {
       );
     }
 
+    // Deactivate the user's store and all their products
+    if (existingUser.isStore) {
+      const catalogsDB = getCatalogsDB();
+      await catalogsDB.collection<Store>("Stores").updateOne(
+        { userId },
+        { $set: { isActive: false } }
+      );
+      await catalogsDB.collection<Product>("Products").updateMany(
+        { userId },
+        { $set: { isActive: false } }
+      );
+    }
+
     const updatedUser = await users.findOne({ id: userId });
 
     return {
@@ -908,6 +1082,19 @@ export const adminMutations = {
       { id: userId },
       { $set: { isSuspended: false, isActive: true } }
     );
+
+    // Re-activate the user's store and all their products
+    if (existingUser.isStore) {
+      const catalogsDB = getCatalogsDB();
+      await catalogsDB.collection<Store>("Stores").updateOne(
+        { userId },
+        { $set: { isActive: true } }
+      );
+      await catalogsDB.collection<Product>("Products").updateMany(
+        { userId },
+        { $set: { isActive: true } }
+      );
+    }
 
     const updatedUser = await users.findOne({ id: userId });
 

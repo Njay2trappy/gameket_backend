@@ -1930,6 +1930,11 @@ export const catalogsMutations = {
       return { code: 404, success: false, message: "Product not found or does not belong to you" };
     }
 
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
+    if (!store || !store.isActive) {
+      return { code: 403, success: false, message: "Your store is not active. Products cannot be enabled while your store is inactive" };
+    }
+
     if (product.isActive) {
       return { code: 409, success: false, message: "Product is already enabled" };
     }
