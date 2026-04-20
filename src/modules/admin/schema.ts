@@ -219,6 +219,28 @@ export const adminTypeDefs = `#graphql
     orders: AdminOrderConnection!
   }
 
+  type AdminPremiumNode {
+    user: User!
+    premium: PremiumDetails!
+  }
+
+  type AdminPremiumEdge {
+    cursor: String!
+    node: AdminPremiumNode!
+  }
+
+  type AdminPremiumConnection {
+    edges: [AdminPremiumEdge!]!
+    pageInfo: AdminPageInfo!
+  }
+
+  type AdmingetPremiumUsersResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    premiumUsers: AdminPremiumConnection!
+  }
+
   extend type Query {
     adminGetDetails(filter: AdminStatsFilter): AdminGetDetailsResponse!
     AdmingetTransactions(type: String, first: Int, after: String, last: Int, before: String): AdminGetTransactionsResponse!
@@ -230,6 +252,7 @@ export const adminTypeDefs = `#graphql
     AdmingetSupports(first: Int, after: String, last: Int, before: String): AdmingetSupportsResponse!
     AdmingetDisputes(first: Int, after: String, last: Int, before: String): AdmingetDisputesResponse!
     AdmingetOrders(status: String, first: Int, after: String, last: Int, before: String): AdmingetOrdersResponse!
+    AdmingetPremiumUsers(first: Int, after: String, last: Int, before: String): AdmingetPremiumUsersResponse!
   }
 
   extend type Mutation {

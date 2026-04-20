@@ -679,6 +679,79 @@ export const adminQueries = {
     };
   },
 
+  AdmingetPremiumUsers: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const db = getDB();
+
+    const allPremium = await db
+      .collection<Premium>("Premium")
+      .find({ isActive: true })
+      .sort({ subscribedAt: -1 })
+      .toArray();
+
+    const total = allPremium.length;
+    const defaultPageSize = 50;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allPremium.slice(start, end);
+    const userIds = [...new Set(sliced.map((p) => p.userId))];
+    const users = await db.collection<User>("users").find({ id: { $in: userIds } }).toArray();
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    const edges = sliced.map((p, i) => ({
+      cursor: encodeCursor(start + i),
+      node: {
+        user: userMap.get(p.userId)!,
+        premium: {
+          subscribedAt: p.subscribedAt,
+          expiresAt: p.expiresAt,
+          isActive: p.isActive,
+        },
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: `${total} premium user(s) found`,
+      premiumUsers: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
   AdmingetDisputes: async (
     _: unknown,
     { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
