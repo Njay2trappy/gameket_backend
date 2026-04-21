@@ -298,6 +298,9 @@ export const adminTypeDefs = `#graphql
     AdmingetPremiumUsers(first: Int, after: String, last: Int, before: String): AdmingetPremiumUsersResponse!
     AdmingetProducts(first: Int, after: String, last: Int, before: String): AdmingetProductsResponse!
     AdmingetProductCodes(productId: ID!, first: Int, after: String, last: Int, before: String): AdmingetProductCodesResponse!
+    AdminCheckProductADPosition(productId: ID!, amount: Float!): CheckProductADPositionResponse!
+    AdminCheckStoreADPosition(amount: Float!): CheckStoreADPositionResponse!
+    AdmingetUserAdvertisableProducts(first: Int, after: String, last: Int, before: String): GetUserAdvertisableProductsResponse!
   }
 
   extend type Mutation {

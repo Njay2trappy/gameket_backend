@@ -854,6 +854,116 @@ export const adminQueries = {
     return catalogsQueries.viewProductCodes(_, { productId, first, after, last, before }, context);
   },
 
+  AdminCheckProductADPosition: async (
+    _: unknown,
+    { productId, amount }: { productId: string; amount: number },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const catalogsDB = getCatalogsDB();
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId });
+
+    if (!product) {
+      return {
+        code: 404,
+        success: false,
+        message: "Product not found",
+        category: null,
+        overallPosition: null,
+        categoryPosition: null,
+        totalPromoted: null,
+        totalPromotedInCategory: null,
+      };
+    }
+
+    const delegatedContext: Context = {
+      ...context,
+      user: {
+        userId: product.userId,
+        email: context.user.email,
+      },
+      authError: null,
+    };
+
+    return catalogsQueries.checkProductADPosition(_, { productId, amount }, delegatedContext);
+  },
+
+  AdminCheckStoreADPosition: async (
+    _: unknown,
+    { amount }: { amount: number },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const catalogsDB = getCatalogsDB();
+    const officialStore = await catalogsDB.collection<Store>("Stores").findOne({ type: "official" });
+
+    if (!officialStore) {
+      return {
+        code: 404,
+        success: false,
+        message: "Official store not found",
+        overallPosition: null,
+        totalPromoted: null,
+      };
+    }
+
+    const delegatedContext: Context = {
+      ...context,
+      user: {
+        userId: officialStore.userId,
+        email: context.user.email,
+      },
+      authError: null,
+    };
+
+    return catalogsQueries.checkStoreADPosition(_, { amount }, delegatedContext);
+  },
+
+  AdmingetUserAdvertisableProducts: async (
+    _: unknown,
+    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const catalogsDB = getCatalogsDB();
+    const officialStore = await catalogsDB.collection<Store>("Stores").findOne({ type: "official" });
+
+    if (!officialStore) {
+      return {
+        code: 404,
+        success: false,
+        message: "Official store not found",
+        products: null,
+      };
+    }
+
+    const delegatedContext: Context = {
+      ...context,
+      user: {
+        userId: officialStore.userId,
+        email: context.user.email,
+      },
+      authError: null,
+    };
+
+    return catalogsQueries.getUserAdvertisableProducts(_, { first, after, last, before }, delegatedContext);
+  },
+
   AdmingetDisputes: async (
     _: unknown,
     { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
@@ -1634,7 +1744,29 @@ export const adminMutations = {
         extensions: { code: "UNAUTHENTICATED" },
       });
     }
-    return catalogsMutations.advertiseProduct(_, { input }, context);
+
+    const catalogsDB = getCatalogsDB();
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: input.productId });
+
+    if (!product) {
+      return {
+        code: 404,
+        success: false,
+        message: "Product not found",
+        promotion: null,
+      };
+    }
+
+    const delegatedContext: Context = {
+      ...context,
+      user: {
+        userId: product.userId,
+        email: context.user.email,
+      },
+      authError: null,
+    };
+
+    return catalogsMutations.advertiseProduct(_, { input }, delegatedContext);
   },
 
   AdminAdvertiseStore: async (_: unknown, { input }: { input: { amount: number; campaignStart: string; campaignEnd: string } }, context: Context) => {
@@ -1643,6 +1775,28 @@ export const adminMutations = {
         extensions: { code: "UNAUTHENTICATED" },
       });
     }
-    return catalogsMutations.advertiseStore(_, { input }, context);
+
+    const catalogsDB = getCatalogsDB();
+    const officialStore = await catalogsDB.collection<Store>("Stores").findOne({ type: "official" });
+
+    if (!officialStore) {
+      return {
+        code: 404,
+        success: false,
+        message: "Official store not found",
+        promotion: null,
+      };
+    }
+
+    const delegatedContext: Context = {
+      ...context,
+      user: {
+        userId: officialStore.userId,
+        email: context.user.email,
+      },
+      authError: null,
+    };
+
+    return catalogsMutations.advertiseStore(_, { input }, delegatedContext);
   },
 };
