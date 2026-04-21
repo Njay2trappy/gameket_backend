@@ -284,6 +284,20 @@ export const adminTypeDefs = `#graphql
     soldCodes: CodeConnection
   }
 
+  type AdmingetDisputeDetailsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    dispute: DisputeDetails
+  }
+
+  type AdminDisputeActionResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    dispute: DisputeDetails
+  }
+
   extend type Query {
     adminGetDetails(filter: AdminStatsFilter): AdminGetDetailsResponse!
     AdmingetTransactions(type: String, first: Int, after: String, last: Int, before: String): AdminGetTransactionsResponse!
@@ -293,7 +307,8 @@ export const adminTypeDefs = `#graphql
     AdmingetVerifications(first: Int, after: String, last: Int, before: String): AdmingetVerificationsResponse!
     AdmingetSuspendedUSers(first: Int, after: String, last: Int, before: String): AdmingetSuspendedUSersResponse!
     AdmingetSupports(first: Int, after: String, last: Int, before: String): AdmingetSupportsResponse!
-    AdmingetDisputes(first: Int, after: String, last: Int, before: String): AdmingetDisputesResponse!
+    AdmingetDisputes(status: DisputeStatus, first: Int, after: String, last: Int, before: String): AdmingetDisputesResponse!
+    AdmingetDisputeDetails(disputeId: ID!, first: Int, after: String, last: Int, before: String): AdmingetDisputeDetailsResponse!
     AdmingetOrders(status: String, first: Int, after: String, last: Int, before: String): AdmingetOrdersResponse!
     AdmingetPremiumUsers(first: Int, after: String, last: Int, before: String): AdmingetPremiumUsersResponse!
     AdmingetProducts(first: Int, after: String, last: Int, before: String): AdmingetProductsResponse!
@@ -320,5 +335,9 @@ export const adminTypeDefs = `#graphql
     AdminDeleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
     AdminAdvertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!
     AdminAdvertiseStore(input: AdvertiseStoreInput!): AdvertiseStoreResponse!
+    AdminUpdateDispute(disputeId: ID!, message: String!): AdminDisputeActionResponse!
+    AdminSetDisputeStatus(disputeId: ID!, status: DisputeStatus!): AdminDisputeActionResponse!
+    AdminResolveDisputeForSeller(disputeId: ID!): AdminDisputeActionResponse!
+    AdminRefundBuyer(disputeId: ID!): AdminDisputeActionResponse!
   }
 `;

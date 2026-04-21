@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
@@ -10,6 +11,19 @@ import { catalogsMutations, catalogsQueries } from "../catalogs/resolvers.js";
 const MAX_ADMIN_ATTEMPTS = 5;
 const ADMIN_LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
 const adminLoginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+function getRankFromSales(totalSales: number): number {
+  if (totalSales >= 10000) return 10;
+  if (totalSales >= 9000) return 9;
+  if (totalSales >= 7500) return 8;
+  if (totalSales >= 5000) return 7;
+  if (totalSales >= 3500) return 6;
+  if (totalSales >= 2500) return 5;
+  if (totalSales >= 1000) return 4;
+  if (totalSales >= 500) return 3;
+  if (totalSales >= 100) return 2;
+  return 1;
+}
 
 function encodeCursor(index: number): string {
   return Buffer.from(`cursor:${index}`).toString("base64");
@@ -966,7 +980,7 @@ export const adminQueries = {
 
   AdmingetDisputes: async (
     _: unknown,
-    { first, after, last, before }: { first?: number; after?: string; last?: number; before?: string },
+    { status, first, after, last, before }: { status?: "open" | "under_review" | "resolved" | "closed"; first?: number; after?: string; last?: number; before?: string },
     context: Context
   ) => {
     if (!context.user || context.user.role !== "admin") {
@@ -979,9 +993,11 @@ export const adminQueries = {
     const walletsDB = getWalletsDB();
     const catalogsDB = getCatalogsDB();
 
+    const query = status ? { status } : {};
+
     const allDisputes = await walletsDB
       .collection<Dispute>("Disputes")
-      .find({})
+      .find(query)
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -1145,6 +1161,132 @@ export const adminQueries = {
           fetchedCount: edges.length,
           remainingCount: total - end,
         },
+      },
+    };
+  },
+
+  AdmingetDisputeDetails: async (
+    _: unknown,
+    { disputeId, first, after, last, before }: { disputeId: string; first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", dispute: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: dispute.storeId });
+    const buyer = await db.collection<User>("users").findOne({ id: dispute.buyerId });
+    const seller = await db.collection<User>("users").findOne({ id: dispute.sellerId });
+
+    const allMessages = [...(dispute.messages || [])].reverse();
+    const total = allMessages.length;
+
+    const defaultPageSize = 30;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+    let msgStart = 0;
+    let msgEnd = total;
+
+    if (pageFirst != null && after) {
+      msgStart = decodeCursor(after) + 1;
+      msgEnd = Math.min(msgStart + pageFirst, total);
+    } else if (pageFirst != null) {
+      msgEnd = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      msgEnd = decodeCursor(before);
+      msgStart = Math.max(msgEnd - last, 0);
+    } else if (last != null) {
+      msgStart = Math.max(total - last, 0);
+    }
+
+    const sliced = allMessages.slice(msgStart, msgEnd);
+
+    const messageEdges = sliced.map((m, i) => ({
+      cursor: encodeCursor(msgStart + i),
+      node: {
+        senderId: m.senderId,
+        senderName: m.senderName,
+        message: m.message,
+        sentAt: m.sentAt,
+      },
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: "Dispute retrieved successfully",
+      dispute: {
+        disputeId: dispute.disputeId,
+        orderId: dispute.orderId,
+        buyerId: dispute.buyerId,
+        sellerId: dispute.sellerId,
+        storeId: dispute.storeId,
+        reason: dispute.reason,
+        status: dispute.status,
+        messages: {
+          edges: messageEdges,
+          pageInfo: {
+            hasNextPage: msgEnd < total,
+            hasPreviousPage: msgStart > 0,
+            startCursor: messageEdges.length ? messageEdges[0].cursor : null,
+            endCursor: messageEdges.length ? messageEdges[messageEdges.length - 1].cursor : null,
+            fetchedCount: messageEdges.length,
+            remainingCount: total - msgEnd,
+          },
+        },
+        createdAt: dispute.createdAt,
+        order: order
+          ? {
+              orderId: order.orderId,
+              buyerId: order.buyerId,
+              buyerName: order.buyerName || buyer?.username || "",
+              sellerId: order.sellerId,
+              sellerName: seller?.username || "",
+              storeId: order.storeId,
+              product: null,
+              codes: [],
+              amount: order.amount,
+              fee: order.fee,
+              totalAmount: order.totalAmount,
+              status: order.status,
+              type: order.type,
+              action: "buy",
+              isReviewed: order.isReviewed,
+              isReleased: order.isReleased,
+              reviewType: order.reviewType ?? null,
+              disputeReason: order.disputeReason ?? null,
+              createdAt: order.createdAt,
+              releasedAt: order.releasedAt,
+              store: store
+                ? {
+                    storeId: store.storeId,
+                    storeName: store.storeName,
+                    isActive: store.isActive,
+                    isApproved: store.isApproved,
+                    approveStatus: store.approveStatus,
+                    isPromoted: store.isPromoted,
+                    type: store.type,
+                    totalSales: store.totalSales,
+                    positiveReviews: store.positiveReviews,
+                    negativeReviews: store.negativeReviews,
+                    registered: store.createdAt,
+                    requestCount: store.requestCount ?? 0,
+                  }
+                : null,
+              transaction: null,
+            }
+          : null,
       },
     };
   },
@@ -1937,6 +2079,353 @@ export const adminMutations = {
           registered: officialStore.createdAt?.split("T")[0] || officialStore.createdAt,
           requestCount: officialStore.requestCount ?? 0,
         },
+      },
+    };
+  },
+
+  AdminUpdateDispute: async (
+    _: unknown,
+    { disputeId, message }: { disputeId: string; message: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const trimmed = (message || "").trim();
+    if (!trimmed) {
+      return { code: 400, success: false, message: "Message cannot be empty", dispute: null };
+    }
+
+    const walletsDB = getWalletsDB();
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", dispute: null };
+    }
+
+    if (dispute.status === "closed") {
+      return { code: 400, success: false, message: "Cannot update a closed dispute", dispute: null };
+    }
+
+    const now = new Date().toISOString();
+    const newMessage: DisputeMessage = {
+      senderId: context.user.userId,
+      senderName: "Admin",
+      message: trimmed,
+      sentAt: now,
+    };
+
+    await walletsDB.collection<Dispute>("Disputes").updateOne(
+      { disputeId },
+      { $push: { messages: newMessage }, $set: { status: dispute.status === "open" ? "under_review" : dispute.status } }
+    );
+
+    const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Dispute updated successfully",
+      dispute: {
+        disputeId: updated!.disputeId,
+        orderId: updated!.orderId,
+        buyerId: updated!.buyerId,
+        sellerId: updated!.sellerId,
+        storeId: updated!.storeId,
+        reason: updated!.reason,
+        status: updated!.status,
+        messages: buildDisputeMessagesConnection(updated!.messages || []),
+        createdAt: updated!.createdAt,
+        order: null,
+      },
+    };
+  },
+
+  AdminSetDisputeStatus: async (
+    _: unknown,
+    { disputeId, status }: { disputeId: string; status: "open" | "under_review" | "resolved" | "closed" },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const validStatuses = ["open", "under_review", "resolved", "closed"] as const;
+    if (!validStatuses.includes(status)) {
+      return { code: 400, success: false, message: "Invalid dispute status", dispute: null };
+    }
+
+    const walletsDB = getWalletsDB();
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", dispute: null };
+    }
+
+    if (dispute.status === status) {
+      return {
+        code: 200,
+        success: true,
+        message: `Dispute is already ${status}`,
+        dispute: {
+          disputeId: dispute.disputeId,
+          orderId: dispute.orderId,
+          buyerId: dispute.buyerId,
+          sellerId: dispute.sellerId,
+          storeId: dispute.storeId,
+          reason: dispute.reason,
+          status: dispute.status,
+          messages: buildDisputeMessagesConnection(dispute.messages || []),
+          createdAt: dispute.createdAt,
+          order: null,
+        },
+      };
+    }
+
+    await walletsDB.collection<Dispute>("Disputes").updateOne(
+      { disputeId },
+      { $set: { status } }
+    );
+
+    const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    return {
+      code: 200,
+      success: true,
+      message: `Dispute status set to ${status}`,
+      dispute: {
+        disputeId: updated!.disputeId,
+        orderId: updated!.orderId,
+        buyerId: updated!.buyerId,
+        sellerId: updated!.sellerId,
+        storeId: updated!.storeId,
+        reason: updated!.reason,
+        status: updated!.status,
+        messages: buildDisputeMessagesConnection(updated!.messages || []),
+        createdAt: updated!.createdAt,
+        order: null,
+      },
+    };
+  },
+
+  AdminResolveDisputeForSeller: async (
+    _: unknown,
+    { disputeId }: { disputeId: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const walletsDB = getWalletsDB();
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", dispute: null };
+    }
+
+    if (dispute.status === "resolved" || dispute.status === "closed") {
+      return { code: 400, success: false, message: `Dispute is already ${dispute.status}`, dispute: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Associated order not found", dispute: null };
+    }
+
+    if (!order.isReleased) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: -order.amount, availableBalance: order.amount } }
+      );
+
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: order.sellerTransactionId },
+        { $set: { status: "completed" } }
+      );
+
+      await walletsDB.collection<Order>("Orders").updateOne(
+        { orderId: order.orderId },
+        { $set: { status: "completed", isReleased: true, releasedAt: new Date().toISOString() } }
+      );
+    } else if (order.status === "disputed") {
+      await walletsDB.collection<Order>("Orders").updateOne(
+        { orderId: order.orderId },
+        { $set: { status: "completed" } }
+      );
+    }
+
+    await walletsDB.collection("RefundOffers").updateMany(
+      { orderId: order.orderId, status: "pending" },
+      { $set: { status: "declined" } }
+    );
+
+    const now = new Date().toISOString();
+    const resolutionMessage: DisputeMessage = {
+      senderId: context.user.userId,
+      senderName: "Admin",
+      message: "Dispute closed in favor of the seller. Funds released to the seller.",
+      sentAt: now,
+    };
+
+    await walletsDB.collection<Dispute>("Disputes").updateOne(
+      { disputeId },
+      { $push: { messages: resolutionMessage }, $set: { status: "closed" } }
+    );
+
+    const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Dispute closed in favor of the seller",
+      dispute: {
+        disputeId: updated!.disputeId,
+        orderId: updated!.orderId,
+        buyerId: updated!.buyerId,
+        sellerId: updated!.sellerId,
+        storeId: updated!.storeId,
+        reason: updated!.reason,
+        status: updated!.status,
+        messages: buildDisputeMessagesConnection(updated!.messages || []),
+        createdAt: updated!.createdAt,
+        order: null,
+      },
+    };
+  },
+
+  AdminRefundBuyer: async (
+    _: unknown,
+    { disputeId }: { disputeId: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+    if (!dispute) {
+      return { code: 404, success: false, message: "Dispute not found", dispute: null };
+    }
+
+    if (dispute.status === "resolved" || dispute.status === "closed") {
+      return { code: 400, success: false, message: `Dispute is already ${dispute.status}`, dispute: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Associated order not found", dispute: null };
+    }
+
+    if (order.status === "refunded") {
+      return { code: 400, success: false, message: "Order has already been refunded", dispute: null };
+    }
+
+    const refundAmount = parseFloat(order.totalAmount.toFixed(2));
+    const sellerDeduction = parseFloat(order.amount.toFixed(2));
+
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId: order.buyerId },
+      { $inc: { availableBalance: refundAmount } }
+    );
+
+    if (order.isReleased) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { availableBalance: -sellerDeduction } }
+      );
+    } else {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: -sellerDeduction } }
+      );
+    }
+
+    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+      { storeId: order.storeId },
+      { $inc: { totalSales: -order.quantity } },
+      { returnDocument: "after" }
+    );
+
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: order.sellerId },
+        { $set: { rank: newRank } }
+      );
+    }
+
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.buyerTransactionId },
+      { $set: { status: "refunded" } }
+    );
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.sellerTransactionId },
+      { $set: { status: "refunded" } }
+    );
+
+    const buyerRefundTxnId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+    const now = new Date().toISOString();
+    await walletsDB.collection<Transaction>("Transactions").insertOne({
+      userId: order.buyerId,
+      id: buyerRefundTxnId,
+      type: "Refund",
+      status: "completed",
+      method: "balance",
+      amount: refundAmount,
+      createdAt: now,
+    });
+
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId: order.orderId },
+      { $set: { status: "refunded", isReleased: true } }
+    );
+
+    await walletsDB.collection("RefundOffers").updateMany(
+      { orderId: order.orderId, status: "pending" },
+      { $set: { status: "declined" } }
+    );
+
+    const resolutionMessage: DisputeMessage = {
+      senderId: context.user.userId,
+      senderName: "Admin",
+      message: `Dispute resolved in favor of the buyer. Refund of ${refundAmount} issued.`,
+      sentAt: now,
+    };
+
+    await walletsDB.collection<Dispute>("Disputes").updateOne(
+      { disputeId },
+      { $push: { messages: resolutionMessage }, $set: { status: "resolved" } }
+    );
+
+    const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Buyer refunded and dispute resolved",
+      dispute: {
+        disputeId: updated!.disputeId,
+        orderId: updated!.orderId,
+        buyerId: updated!.buyerId,
+        sellerId: updated!.sellerId,
+        storeId: updated!.storeId,
+        reason: updated!.reason,
+        status: updated!.status,
+        messages: buildDisputeMessagesConnection(updated!.messages || []),
+        createdAt: updated!.createdAt,
+        order: null,
       },
     };
   },
