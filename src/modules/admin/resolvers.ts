@@ -1746,7 +1746,20 @@ export const adminMutations = {
     }
 
     const catalogsDB = getCatalogsDB();
-    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: input.productId });
+    const db = getDB();
+    const { productId, amount } = input;
+    const start = new Date(input.campaignStart);
+    const end = new Date(input.campaignEnd);
+
+    if (amount < 0.5) {
+      return { code: 400, success: false, message: "Minimum ad amount is 0.5", promotion: null };
+    }
+
+    if (end <= start) {
+      return { code: 400, success: false, message: "Campaign end must be after campaign start", promotion: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId });
 
     if (!product) {
       return {
@@ -1757,16 +1770,75 @@ export const adminMutations = {
       };
     }
 
-    const delegatedContext: Context = {
-      ...context,
-      user: {
-        userId: product.userId,
-        email: context.user.email,
-      },
-      authError: null,
+    if (!product.isActive) {
+      return { code: 400, success: false, message: "Product must be active to advertise", promotion: null };
+    }
+
+    const existingPromotion = await catalogsDB
+      .collection("PromotedProducts")
+      .findOne({ productId });
+
+    if (existingPromotion) {
+      return {
+        code: 409,
+        success: false,
+        message: "Product is already promoted. Wait for the current campaign to end before creating a new one",
+        promotion: null,
+      };
+    }
+
+    const user = await db.collection<User>("users").findOne({ id: product.userId });
+    if (!user) {
+      return { code: 404, success: false, message: "Product owner not found", promotion: null };
+    }
+
+    const promotion = {
+      userId: product.userId,
+      storeId: product.storeId,
+      productId,
+      amount: parseFloat(amount.toFixed(2)),
+      campaignStart: start.toISOString(),
+      campaignEnd: end.toISOString(),
+      createdAt: new Date().toISOString(),
     };
 
-    return catalogsMutations.advertiseProduct(_, { input }, delegatedContext);
+    await catalogsDB.collection("PromotedProducts").insertOne(promotion);
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId: product.productId, userId: product.userId },
+      { $set: { isPromoted: true } }
+    );
+
+    return {
+      code: 201,
+      success: true,
+      message: "Product promoted successfully",
+      user,
+      promotion: {
+        productId: promotion.productId,
+        amount: promotion.amount,
+        campaignStart: promotion.campaignStart,
+        campaignEnd: promotion.campaignEnd,
+        createdAt: promotion.createdAt,
+        product: {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: true,
+          available: product.available,
+          sold: product.sold,
+          type: product.type,
+          createdAt: product.createdAt,
+        },
+      },
+    };
   },
 
   AdminAdvertiseStore: async (_: unknown, { input }: { input: { amount: number; campaignStart: string; campaignEnd: string } }, context: Context) => {
@@ -1777,6 +1849,19 @@ export const adminMutations = {
     }
 
     const catalogsDB = getCatalogsDB();
+    const db = getDB();
+    const { amount } = input;
+    const start = new Date(input.campaignStart);
+    const end = new Date(input.campaignEnd);
+
+    if (amount < 0.5) {
+      return { code: 400, success: false, message: "Minimum ad amount is 0.5", promotion: null };
+    }
+
+    if (end <= start) {
+      return { code: 400, success: false, message: "Campaign end must be after campaign start", promotion: null };
+    }
+
     const officialStore = await catalogsDB.collection<Store>("Stores").findOne({ type: "official" });
 
     if (!officialStore) {
@@ -1788,15 +1873,71 @@ export const adminMutations = {
       };
     }
 
-    const delegatedContext: Context = {
-      ...context,
-      user: {
-        userId: officialStore.userId,
-        email: context.user.email,
-      },
-      authError: null,
+    if (!officialStore.isActive) {
+      return { code: 400, success: false, message: "Store must be active to advertise", promotion: null };
+    }
+
+    const existingPromotion = await catalogsDB
+      .collection("PromotedStores")
+      .findOne({ storeId: officialStore.storeId });
+
+    if (existingPromotion) {
+      return {
+        code: 409,
+        success: false,
+        message: "Store is already promoted. Wait for the current campaign to end before creating a new one",
+        promotion: null,
+      };
+    }
+
+    const user = await db.collection<User>("users").findOne({ id: officialStore.userId });
+    if (!user) {
+      return { code: 404, success: false, message: "Store owner not found", promotion: null };
+    }
+
+    const promotion = {
+      userId: officialStore.userId,
+      storeId: officialStore.storeId,
+      amount: parseFloat(amount.toFixed(2)),
+      campaignStart: start.toISOString(),
+      campaignEnd: end.toISOString(),
+      createdAt: new Date().toISOString(),
     };
 
-    return catalogsMutations.advertiseStore(_, { input }, delegatedContext);
+    await catalogsDB.collection("PromotedStores").insertOne(promotion);
+
+    await catalogsDB.collection<Store>("Stores").updateOne(
+      { storeId: officialStore.storeId, userId: officialStore.userId },
+      { $set: { isPromoted: true } }
+    );
+
+    return {
+      code: 201,
+      success: true,
+      message: "Store promoted successfully",
+      user,
+      promotion: {
+        storeId: promotion.storeId,
+        amount: promotion.amount,
+        campaignStart: promotion.campaignStart,
+        campaignEnd: promotion.campaignEnd,
+        createdAt: promotion.createdAt,
+        store: {
+          storeId: officialStore.storeId,
+          storeName: officialStore.storeName,
+          isActive: officialStore.isActive,
+          isApproved: officialStore.isApproved,
+          approveStatus: officialStore.approveStatus,
+          isPromoted: true,
+          type: officialStore.type,
+          totalSales: officialStore.totalSales,
+          positiveReviews: officialStore.positiveReviews,
+          negativeReviews: officialStore.negativeReviews,
+          reviews: officialStore.reviews,
+          registered: officialStore.createdAt?.split("T")[0] || officialStore.createdAt,
+          requestCount: officialStore.requestCount ?? 0,
+        },
+      },
+    };
   },
 };
