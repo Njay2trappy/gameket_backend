@@ -298,6 +298,46 @@ export const adminTypeDefs = `#graphql
     dispute: DisputeDetails
   }
 
+  type AdminWithdrawalNode {
+    withdrawalId: ID!
+    transactionId: String!
+    userId: String!
+    amount: Float!
+    serviceFee: Float!
+    networkFee: Float!
+    totalFee: Float!
+    payoutAmount: Float!
+    status: WithdrawalStatus!
+    wallet: PaymentMethod!
+    createdAt: String!
+    processedAt: String
+    processedBy: String
+  }
+
+  type AdminWithdrawalEdge {
+    cursor: String!
+    node: AdminWithdrawalNode!
+  }
+
+  type AdminWithdrawalConnection {
+    edges: [AdminWithdrawalEdge!]!
+    pageInfo: AdminPageInfo!
+  }
+
+  type AdminGetWithdrawalsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    withdrawals: AdminWithdrawalConnection!
+  }
+
+  type AdminWithdrawalActionResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    withdrawal: AdminWithdrawalNode
+  }
+
   extend type Query {
     adminGetDetails(filter: AdminStatsFilter): AdminGetDetailsResponse!
     AdmingetTransactions(type: String, first: Int, after: String, last: Int, before: String): AdminGetTransactionsResponse!
@@ -313,6 +353,7 @@ export const adminTypeDefs = `#graphql
     AdmingetPremiumUsers(first: Int, after: String, last: Int, before: String): AdmingetPremiumUsersResponse!
     AdmingetProducts(first: Int, after: String, last: Int, before: String): AdmingetProductsResponse!
     AdmingetProductCodes(productId: ID!, first: Int, after: String, last: Int, before: String): AdmingetProductCodesResponse!
+    AdminGetWithdrawals(status: WithdrawalStatus, first: Int, after: String, last: Int, before: String): AdminGetWithdrawalsResponse!
     AdminCheckProductADPosition(productId: ID!, amount: Float!): CheckProductADPositionResponse!
     AdminCheckStoreADPosition(amount: Float!): CheckStoreADPositionResponse!
     AdmingetUserAdvertisableProducts(first: Int, after: String, last: Int, before: String): GetUserAdvertisableProductsResponse!
@@ -339,5 +380,7 @@ export const adminTypeDefs = `#graphql
     AdminSetDisputeStatus(disputeId: ID!, status: DisputeStatus!): AdminDisputeActionResponse!
     AdminResolveDisputeForSeller(disputeId: ID!): AdminDisputeActionResponse!
     AdminRefundBuyer(disputeId: ID!): AdminDisputeActionResponse!
+    AdminApproveWithdrawal(withdrawalId: ID!): AdminWithdrawalActionResponse!
+    AdminDeclineWithdrawal(withdrawalId: ID!): AdminWithdrawalActionResponse!
   }
 `;

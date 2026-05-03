@@ -97,6 +97,22 @@ export interface Transaction {
   createdAt: string;
 }
 
+export interface Withdrawal {
+  withdrawalId: string;
+  transactionId: string;
+  userId: string;
+  amount: number;
+  serviceFee: number;
+  networkFee: number;
+  totalFee: number;
+  payoutAmount: number;
+  wallet: PaymentMethod;
+  status: "pending" | "approved" | "declined";
+  createdAt: string;
+  processedAt: string | null;
+  processedBy: string | null;
+}
+
 export interface Product {
   userId: string;
   storeId: string;

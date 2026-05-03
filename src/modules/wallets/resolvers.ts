@@ -1,7 +1,7 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist } from "../../types.js";
+import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal } from "../../types.js";
 import type { Context } from "../../index.js";
 
 function getRankFromSales(totalSales: number): number {
@@ -60,6 +60,92 @@ function buildMessagesConnection(messages: DisputeMessage[]) {
       remainingCount: 0,
     },
   };
+}
+
+function getUTCDateKey(value: string): string | null {
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function addDailyDelta(map: Map<string, number>, key: string, delta: number) {
+  const current = map.get(key) || 0;
+  map.set(key, parseFloat((current + delta).toFixed(2)));
+}
+
+function getTransactionBalanceDelta(txn: Transaction): number {
+  switch (txn.type) {
+    case "Deposit":
+    case "Refund":
+    case "PartialRefund":
+      return txn.status === "completed" ? txn.amount : 0;
+    case "PremiumSubscription":
+    case "ProductPromotion":
+    case "StorePromotion":
+      return txn.status === "completed" ? -txn.amount : 0;
+    case "ProductPurchase":
+      if (txn.status === "failed" || txn.status === "refunded") return 0;
+      return txn.status === "completed" ? -txn.amount : 0;
+    case "SoldCodes":
+      if (txn.status === "failed" || txn.status === "refunded") return 0;
+      return txn.amount;
+    default:
+      return 0;
+  }
+}
+
+function buildBalanceChangeSeries(
+  dailyDelta: Map<string, number>,
+  startDate: Date,
+  endDate: Date
+) {
+  const points: Array<{ date: string; value: number }> = [];
+  const cursor = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()));
+  const end = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate()));
+
+  let running = 0;
+  while (cursor <= end) {
+    const key = cursor.toISOString().slice(0, 10);
+    running = parseFloat((running + (dailyDelta.get(key) || 0)).toFixed(2));
+    points.push({ date: key, value: running });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return points;
+}
+
+function buildMonthlyBalanceChangeSeries(
+  dailyDelta: Map<string, number>,
+  endDate: Date,
+  monthCount = 12
+) {
+  const endMonthStart = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), 1));
+  const startMonthStart = new Date(endMonthStart);
+  startMonthStart.setUTCMonth(startMonthStart.getUTCMonth() - (monthCount - 1));
+
+  const monthlyDelta = new Map<string, number>();
+  for (const [dayKey, delta] of dailyDelta.entries()) {
+    const day = new Date(`${dayKey}T00:00:00.000Z`);
+    if (isNaN(day.getTime())) continue;
+    if (day < startMonthStart || day > endDate) continue;
+
+    const monthKey = dayKey.slice(0, 7);
+    const current = monthlyDelta.get(monthKey) || 0;
+    monthlyDelta.set(monthKey, parseFloat((current + delta).toFixed(2)));
+  }
+
+  const points: Array<{ date: string; value: number }> = [];
+  const cursor = new Date(startMonthStart);
+  let running = 0;
+
+  for (let i = 0; i < monthCount; i += 1) {
+    const monthKey = cursor.toISOString().slice(0, 7);
+    running = parseFloat((running + (monthlyDelta.get(monthKey) || 0)).toFixed(2));
+    points.push({ date: `${monthKey}-01`, value: running });
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+
+  return points;
 }
 
 export const walletsQueries = {
@@ -680,6 +766,292 @@ export const walletsQueries = {
           remainingCount: total - end,
         },
       },
+    };
+  },
+
+  getUserAnalysis: async (_: unknown, __: unknown, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return {
+        code: 404,
+        success: false,
+        message: "User not found",
+        user: null,
+        topProducts: [],
+        topCountries: [],
+        profitAnalysis: { last7Days: [], last30Days: [], allTime: [] },
+        releasableFunds: {
+          unlockNext24Hours: 0,
+          unlockNext3Days: 0,
+          unlockNext7Days: 0,
+          orders: [],
+        },
+      };
+    }
+
+    if (!user.isPremium) {
+      return {
+        code: 403,
+        success: false,
+        message: "Premium users only",
+        user,
+        topProducts: [],
+        topCountries: [],
+        profitAnalysis: { last7Days: [], last30Days: [], allTime: [] },
+        releasableFunds: {
+          unlockNext24Hours: 0,
+          unlockNext3Days: 0,
+          unlockNext7Days: 0,
+          orders: [],
+        },
+      };
+    }
+
+    const orders = await walletsDB
+      .collection<Order>("Orders")
+      .find({
+        $or: [{ buyerId: userId }, { sellerId: userId }],
+        status: { $ne: "failed" },
+      })
+      .toArray();
+
+    type Action = "sold" | "purchased";
+    type AggregateNode = { productId: string; quantity: number; action: Action };
+    const aggregateMap = new Map<string, AggregateNode>();
+
+    for (const order of orders) {
+      const rawQuantity = Number(order.quantity);
+      const fallbackQuantity = Array.isArray(order.codes) ? order.codes.length : 0;
+      const normalizedQuantity = Number.isFinite(rawQuantity) && rawQuantity > 0
+        ? Math.floor(rawQuantity)
+        : fallbackQuantity;
+
+      if (normalizedQuantity <= 0) {
+        continue;
+      }
+
+      if (order.buyerId === userId) {
+        const key = `${order.productId}:purchased`;
+        const current = aggregateMap.get(key);
+        if (current) {
+          current.quantity += normalizedQuantity;
+        } else {
+          aggregateMap.set(key, { productId: order.productId, quantity: normalizedQuantity, action: "purchased" });
+        }
+      }
+
+      if (order.sellerId === userId) {
+        const key = `${order.productId}:sold`;
+        const current = aggregateMap.get(key);
+        if (current) {
+          current.quantity += normalizedQuantity;
+        } else {
+          aggregateMap.set(key, { productId: order.productId, quantity: normalizedQuantity, action: "sold" });
+        }
+      }
+    }
+
+    const ranked = [...aggregateMap.values()]
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 10);
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const threeDaysMs = 3 * oneDayMs;
+    const sevenDaysMs = 7 * oneDayMs;
+
+    const rawReleasableOrders = orders
+      .filter((order) => order.sellerId === userId && !order.isReleased && order.status === "completed")
+      .map((order) => {
+        const releaseDate = new Date(order.releasedAt);
+        if (isNaN(releaseDate.getTime())) return null;
+
+        const rawAmount = Number(order.amount);
+        const amount = Number.isFinite(rawAmount) && rawAmount > 0 ? parseFloat(rawAmount.toFixed(2)) : 0;
+
+        const rawQuantity = Number(order.quantity);
+        const fallbackQuantity = Array.isArray(order.codes) ? order.codes.length : 0;
+        const quantity = Number.isFinite(rawQuantity) && rawQuantity > 0
+          ? Math.floor(rawQuantity)
+          : fallbackQuantity;
+
+        return {
+          orderId: order.orderId,
+          productId: order.productId,
+          quantity: Math.max(0, quantity),
+          amount,
+          releaseAt: releaseDate.toISOString(),
+          msUntilRelease: releaseDate.getTime() - nowMs,
+        };
+      })
+      .filter((entry): entry is {
+        orderId: string;
+        productId: string;
+        quantity: number;
+        amount: number;
+        releaseAt: string;
+        msUntilRelease: number;
+      } => entry !== null && entry.amount > 0);
+
+    const productIds = [...new Set([
+      ...ranked.map((r) => r.productId),
+      ...rawReleasableOrders.map((r) => r.productId),
+    ])];
+    const products = productIds.length
+      ? await catalogsDB.collection<Product>("Products").find({ productId: { $in: productIds } }).toArray()
+      : [];
+    const productMap = new Map(products.map((p) => [
+      p.productId,
+      {
+        name: p.name,
+        category: p.category,
+      },
+    ]));
+
+    const counterpartIdSet = new Set<string>();
+    for (const order of orders) {
+      const counterpartyId = order.buyerId === userId ? order.sellerId : order.buyerId;
+      if (!counterpartyId || counterpartyId === userId || counterpartyId === "anon-gameket-id") continue;
+      counterpartIdSet.add(counterpartyId);
+    }
+
+    const counterpartIds = [...counterpartIdSet];
+    const counterpartUsers = counterpartIds.length
+      ? await db.collection<User>("users").find({ id: { $in: counterpartIds } }).toArray()
+      : [];
+    const counterpartCountryMap = new Map(counterpartUsers.map((u) => [u.id, (u.country || "Unknown").trim() || "Unknown"]));
+
+    const countryInteractionMap = new Map<string, number>();
+    for (const order of orders) {
+      const counterpartyId = order.buyerId === userId ? order.sellerId : order.buyerId;
+      if (!counterpartyId || counterpartyId === userId || counterpartyId === "anon-gameket-id") continue;
+
+      const country = counterpartCountryMap.get(counterpartyId) || "Unknown";
+      const current = countryInteractionMap.get(country) || 0;
+      countryInteractionMap.set(country, current + 1);
+    }
+
+    const topCountries = [...countryInteractionMap.entries()]
+      .map(([country, interactionCount]) => ({ country, interactionCount }))
+      .sort((a, b) => {
+        if (b.interactionCount !== a.interactionCount) return b.interactionCount - a.interactionCount;
+        return a.country.localeCompare(b.country);
+      })
+      .slice(0, 10);
+
+    const unlockNext24Hours = parseFloat(
+      rawReleasableOrders
+        .filter((order) => order.msUntilRelease <= oneDayMs)
+        .reduce((sum, order) => sum + order.amount, 0)
+        .toFixed(2)
+    );
+
+    const unlockNext3Days = parseFloat(
+      rawReleasableOrders
+        .filter((order) => order.msUntilRelease <= threeDaysMs)
+        .reduce((sum, order) => sum + order.amount, 0)
+        .toFixed(2)
+    );
+
+    const unlockNext7Days = parseFloat(
+      rawReleasableOrders
+        .filter((order) => order.msUntilRelease <= sevenDaysMs)
+        .reduce((sum, order) => sum + order.amount, 0)
+        .toFixed(2)
+    );
+
+    const releasableOrders = rawReleasableOrders
+      .filter((order) => order.msUntilRelease <= sevenDaysMs)
+      .sort((a, b) => a.releaseAt.localeCompare(b.releaseAt))
+      .map((order) => ({
+        orderId: order.orderId,
+        productId: order.productId,
+        productName: productMap.get(order.productId)?.name || "Unknown product",
+        category: productMap.get(order.productId)?.category || "Unknown",
+        quantity: order.quantity,
+        amount: order.amount,
+        releaseAt: order.releaseAt,
+        hoursUntilRelease: parseFloat((Math.max(order.msUntilRelease, 0) / (60 * 60 * 1000)).toFixed(2)),
+      }));
+
+    const releasableFunds = {
+      unlockNext24Hours,
+      unlockNext3Days,
+      unlockNext7Days,
+      orders: releasableOrders,
+    };
+
+    const transactions = await walletsDB
+      .collection<Transaction>("Transactions")
+      .find({ userId })
+      .toArray();
+
+    const approvedWithdrawals = await walletsDB
+      .collection<Withdrawal>("Withdrawals")
+      .find({ userId, status: "approved" })
+      .toArray();
+
+    const dailyDelta = new Map<string, number>();
+
+    for (const txn of transactions) {
+      // Withdrawal outflow is charted using processedAt from the withdrawal record.
+      if (txn.type === "Withdrawal") continue;
+      const delta = getTransactionBalanceDelta(txn);
+      if (delta === 0) continue;
+
+      const dayKey = getUTCDateKey(txn.createdAt);
+      if (!dayKey) continue;
+      addDailyDelta(dailyDelta, dayKey, delta);
+    }
+
+    for (const withdrawal of approvedWithdrawals) {
+      const eventDate = withdrawal.processedAt || withdrawal.createdAt;
+      const dayKey = getUTCDateKey(eventDate);
+      if (!dayKey) continue;
+      addDailyDelta(dailyDelta, dayKey, -withdrawal.amount);
+    }
+
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+    const last7Start = new Date(today);
+    last7Start.setUTCDate(last7Start.getUTCDate() - 6);
+
+    const last30Start = new Date(today);
+    last30Start.setUTCDate(last30Start.getUTCDate() - 29);
+
+    const profitAnalysis = {
+      last7Days: buildBalanceChangeSeries(dailyDelta, last7Start, today),
+      last30Days: buildBalanceChangeSeries(dailyDelta, last30Start, today),
+      allTime: buildMonthlyBalanceChangeSeries(dailyDelta, today, 12),
+    };
+
+    return {
+      code: 200,
+      success: true,
+      message: "User analysis retrieved successfully",
+      user,
+      topProducts: ranked.map((item) => ({
+        productId: item.productId,
+        productName: productMap.get(item.productId)?.name || "Unknown product",
+        category: productMap.get(item.productId)?.category || "Unknown",
+        quantity: Math.max(0, Math.floor(Number(item.quantity) || 0)),
+        action: item.action,
+      })),
+      topCountries,
+      profitAnalysis,
+      releasableFunds,
     };
   },
 
@@ -1520,6 +1892,128 @@ export const walletsMutations = {
     );
 
     return { code: 201, success: true, message: "Payment method added successfully", user, method };
+  },
+
+  userWithdraw: async (
+    _: unknown,
+    { amount }: { amount: number },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    if (context.user.isSuspended) {
+      return { code: 403, success: false, message: "Your account is suspended. You cannot make withdrawals.", withdrawal: null };
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { code: 400, success: false, message: "Amount must be greater than 0", withdrawal: null };
+    }
+
+    const withdrawalAmount = parseFloat(amount.toFixed(2));
+    const serviceFee = parseFloat((withdrawalAmount * 0.01).toFixed(2));
+    const networkFee = parseFloat((withdrawalAmount * 0.005).toFixed(2));
+    const totalFee = parseFloat((serviceFee + networkFee).toFixed(2));
+    const payoutAmount = parseFloat((withdrawalAmount - totalFee).toFixed(2));
+
+    if (payoutAmount <= 0) {
+      return { code: 400, success: false, message: "Amount is too low after fees", withdrawal: null };
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", withdrawal: null };
+    }
+
+    const balances = walletsDB.collection<Balance>("Balances");
+    const balance = await balances.findOne({ userId });
+    if (!balance) {
+      return { code: 404, success: false, message: "Wallet not found", user, withdrawal: null };
+    }
+
+    const activeMethod = balance.methods.find((method) => method.isActive);
+    if (!activeMethod) {
+      return { code: 400, success: false, message: "Add an active wallet option before making a withdrawal", user, withdrawal: null };
+    }
+
+    if (balance.availableBalance < withdrawalAmount) {
+      return { code: 400, success: false, message: "Insufficient balance", user, withdrawal: null };
+    }
+
+    const balanceUpdate = await balances.updateOne(
+      { userId, availableBalance: { $gte: withdrawalAmount } },
+      { $inc: { availableBalance: -withdrawalAmount, suspendedBalance: withdrawalAmount } }
+    );
+
+    if (balanceUpdate.modifiedCount === 0) {
+      return { code: 400, success: false, message: "Insufficient balance", user, withdrawal: null };
+    }
+
+    const now = new Date().toISOString();
+    const transactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+    const withdrawalId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+
+    const transactionRecord: Transaction = {
+      userId,
+      id: transactionId,
+      type: "Withdrawal",
+      status: "pending",
+      method: "balance",
+      amount: withdrawalAmount,
+      createdAt: now,
+    };
+
+    const withdrawalRecord: Withdrawal = {
+      withdrawalId,
+      transactionId,
+      userId,
+      amount: withdrawalAmount,
+      serviceFee,
+      networkFee,
+      totalFee,
+      payoutAmount,
+      wallet: {
+        name: activeMethod.name,
+        value: activeMethod.value,
+        network: activeMethod.network,
+        isActive: activeMethod.isActive,
+      },
+      status: "pending",
+      createdAt: now,
+      processedAt: null,
+      processedBy: null,
+    };
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne(transactionRecord);
+    await walletsDB.collection<Withdrawal>("Withdrawals").insertOne(withdrawalRecord);
+
+    return {
+      code: 201,
+      success: true,
+      message: "Withdrawal request submitted successfully",
+      user,
+      withdrawal: {
+        withdrawalId,
+        transactionId,
+        userId,
+        amount: withdrawalAmount,
+        serviceFee,
+        networkFee,
+        totalFee,
+        payoutAmount,
+        status: "pending",
+        wallet: withdrawalRecord.wallet,
+        createdAt: now,
+        processedAt: null,
+      },
+    };
   },
 
   buyCodesbyUser: async (

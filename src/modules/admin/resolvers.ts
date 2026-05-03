@@ -4,7 +4,7 @@ import { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Store, Premium, Transaction, Product, Order, Account, VerificationRequest, Support, Balance, Dispute, DisputeMessage } from "../../types.js";
+import type { User, Store, Premium, Transaction, Product, Order, Account, VerificationRequest, Support, Balance, Dispute, DisputeMessage, Withdrawal } from "../../types.js";
 import type { Context } from "../../index.js";
 import { catalogsMutations, catalogsQueries } from "../catalogs/resolvers.js";
 
@@ -69,6 +69,24 @@ function buildDisputeMessagesConnection(messages: DisputeMessage[]) {
       fetchedCount: edges.length,
       remainingCount: 0,
     },
+  };
+}
+
+function toAdminWithdrawalNode(withdrawal: Withdrawal) {
+  return {
+    withdrawalId: withdrawal.withdrawalId,
+    transactionId: withdrawal.transactionId,
+    userId: withdrawal.userId,
+    amount: withdrawal.amount,
+    serviceFee: withdrawal.serviceFee,
+    networkFee: withdrawal.networkFee,
+    totalFee: withdrawal.totalFee,
+    payoutAmount: withdrawal.payoutAmount,
+    status: withdrawal.status,
+    wallet: withdrawal.wallet,
+    createdAt: withdrawal.createdAt,
+    processedAt: withdrawal.processedAt,
+    processedBy: withdrawal.processedBy,
   };
 }
 
@@ -305,6 +323,72 @@ export const adminQueries = {
       success: true,
       message: type ? `${total} transaction(s) found for type ${type}` : `${total} transaction(s) found`,
       transactions: {
+        edges,
+        pageInfo: {
+          hasNextPage: end < total,
+          hasPreviousPage: start > 0,
+          startCursor: edges.length ? edges[0].cursor : null,
+          endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+          fetchedCount: edges.length,
+          remainingCount: total - end,
+        },
+      },
+    };
+  },
+
+  AdminGetWithdrawals: async (
+    _: unknown,
+    { status, first, after, last, before }: { status?: "pending" | "approved" | "declined"; first?: number; after?: string; last?: number; before?: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const walletsDB = getWalletsDB();
+    const query = status ? { status } : {};
+
+    const allWithdrawals = await walletsDB
+      .collection<Withdrawal>("Withdrawals")
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    const total = allWithdrawals.length;
+    const defaultPageSize = 50;
+    const pageFirst = first ?? (last == null ? defaultPageSize : undefined);
+
+    let start = 0;
+    let end = total;
+
+    if (pageFirst != null && after) {
+      start = decodeCursor(after) + 1;
+      end = Math.min(start + pageFirst, total);
+    } else if (pageFirst != null) {
+      end = Math.min(pageFirst, total);
+    } else if (last != null && before) {
+      end = decodeCursor(before);
+      start = Math.max(end - last, 0);
+    } else if (last != null) {
+      start = Math.max(total - last, 0);
+    }
+
+    const sliced = allWithdrawals.slice(start, end);
+
+    const edges = sliced.map((w, i) => ({
+      cursor: encodeCursor(start + i),
+      node: toAdminWithdrawalNode(w),
+    }));
+
+    return {
+      code: 200,
+      success: true,
+      message: status
+        ? `${total} withdrawal request(s) found with status ${status}`
+        : `${total} withdrawal request(s) found`,
+      withdrawals: {
         edges,
         pageInfo: {
           hasNextPage: end < total,
@@ -2080,6 +2164,134 @@ export const adminMutations = {
           requestCount: officialStore.requestCount ?? 0,
         },
       },
+    };
+  },
+
+  AdminApproveWithdrawal: async (
+    _: unknown,
+    { withdrawalId }: { withdrawalId: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const walletsDB = getWalletsDB();
+    const withdrawals = walletsDB.collection<Withdrawal>("Withdrawals");
+    const balances = walletsDB.collection<Balance>("Balances");
+
+    const existing = await withdrawals.findOne({ withdrawalId });
+    if (!existing) {
+      return { code: 404, success: false, message: "Withdrawal request not found", withdrawal: null };
+    }
+
+    if (existing.status !== "pending") {
+      return {
+        code: 400,
+        success: false,
+        message: `Withdrawal request has already been ${existing.status}`,
+        withdrawal: toAdminWithdrawalNode(existing),
+      };
+    }
+
+    const balanceUpdate = await balances.updateOne(
+      { userId: existing.userId, suspendedBalance: { $gte: existing.amount } },
+      { $inc: { suspendedBalance: -existing.amount } }
+    );
+
+    if (balanceUpdate.modifiedCount === 0) {
+      return {
+        code: 409,
+        success: false,
+        message: "Unable to approve withdrawal because suspended balance is insufficient",
+        withdrawal: toAdminWithdrawalNode(existing),
+      };
+    }
+
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: existing.transactionId },
+      { $set: { status: "completed" } }
+    );
+
+    const processedAt = new Date().toISOString();
+    await withdrawals.updateOne(
+      { withdrawalId },
+      { $set: { status: "approved", processedAt, processedBy: context.user.userId } }
+    );
+
+    const updated = await withdrawals.findOne({ withdrawalId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Withdrawal approved successfully",
+      withdrawal: updated ? toAdminWithdrawalNode(updated) : null,
+    };
+  },
+
+  AdminDeclineWithdrawal: async (
+    _: unknown,
+    { withdrawalId }: { withdrawalId: string },
+    context: Context
+  ) => {
+    if (!context.user || context.user.role !== "admin") {
+      throw new GraphQLError("Admin access required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const walletsDB = getWalletsDB();
+    const withdrawals = walletsDB.collection<Withdrawal>("Withdrawals");
+    const balances = walletsDB.collection<Balance>("Balances");
+
+    const existing = await withdrawals.findOne({ withdrawalId });
+    if (!existing) {
+      return { code: 404, success: false, message: "Withdrawal request not found", withdrawal: null };
+    }
+
+    if (existing.status !== "pending") {
+      return {
+        code: 400,
+        success: false,
+        message: `Withdrawal request has already been ${existing.status}`,
+        withdrawal: toAdminWithdrawalNode(existing),
+      };
+    }
+
+    const balanceUpdate = await balances.updateOne(
+      { userId: existing.userId, suspendedBalance: { $gte: existing.amount } },
+      { $inc: { suspendedBalance: -existing.amount, availableBalance: existing.amount } }
+    );
+
+    if (balanceUpdate.modifiedCount === 0) {
+      return {
+        code: 409,
+        success: false,
+        message: "Unable to decline withdrawal because suspended balance is insufficient",
+        withdrawal: toAdminWithdrawalNode(existing),
+      };
+    }
+
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: existing.transactionId },
+      { $set: { status: "failed" } }
+    );
+
+    const processedAt = new Date().toISOString();
+    await withdrawals.updateOne(
+      { withdrawalId },
+      { $set: { status: "declined", processedAt, processedBy: context.user.userId } }
+    );
+
+    const updated = await withdrawals.findOne({ withdrawalId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Withdrawal declined successfully",
+      withdrawal: updated ? toAdminWithdrawalNode(updated) : null,
     };
   },
 

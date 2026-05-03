@@ -6,6 +6,9 @@ export const walletsTypeDefs = `#graphql
     StorePromotion
     ProductPurchase
     SoldCodes
+    Refund
+    PartialRefund
+    Withdrawal
   }
 
   enum TransactionStatus {
@@ -13,6 +16,12 @@ export const walletsTypeDefs = `#graphql
     completed
     failed
     refunded
+  }
+
+  enum WithdrawalStatus {
+    pending
+    approved
+    declined
   }
 
   enum TransactionMethod {
@@ -188,10 +197,69 @@ export const walletsTypeDefs = `#graphql
     order: OrderDetails
   }
 
+  enum UserProductAnalysisAction {
+    sold
+    purchased
+  }
+
+  type UserTopProductAnalysis {
+    productId: ID!
+    productName: String!
+    category: String!
+    quantity: Int!
+    action: UserProductAnalysisAction!
+  }
+
+  type UserTopCountryAnalysis {
+    country: String!
+    interactionCount: Int!
+  }
+
+  type BalanceChangePoint {
+    date: String!
+    value: Float!
+  }
+
+  type ProfitAnalysisData {
+    last7Days: [BalanceChangePoint!]!
+    last30Days: [BalanceChangePoint!]!
+    allTime: [BalanceChangePoint!]!
+  }
+
+  type ReleasableOrderAnalysis {
+    orderId: ID!
+    productId: String!
+    productName: String!
+    category: String!
+    quantity: Int!
+    amount: Float!
+    releaseAt: String!
+    hoursUntilRelease: Float!
+  }
+
+  type ReleasableFundsForecast {
+    unlockNext24Hours: Float!
+    unlockNext3Days: Float!
+    unlockNext7Days: Float!
+    orders: [ReleasableOrderAnalysis!]!
+  }
+
+  type GetUserAnalysisResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    topProducts: [UserTopProductAnalysis!]!
+    topCountries: [UserTopCountryAnalysis!]!
+    profitAnalysis: ProfitAnalysisData!
+    releasableFunds: ReleasableFundsForecast!
+  }
+
   extend type Query {
     getUserWallets: GetUserWalletsResponse!
     getUserTransactions(id: ID, first: Int, after: String, last: Int, before: String): GetUserTransactionsResponse!
     getUserOrders(id: ID, first: Int, after: String, last: Int, before: String): GetUserOrdersResponse!
+    getUserAnalysis: GetUserAnalysisResponse!
     getOrder(id: ID!): GetOrderResponse!
     getUserReviews(first: Int, after: String, last: Int, before: String): GetUserReviewsResponse!
     getStoreReviews(storeId: ID!, category: String!, first: Int, after: String, last: Int, before: String): GetStoreReviewsResponse!
@@ -211,6 +279,29 @@ export const walletsTypeDefs = `#graphql
     message: String!
     user: User
     method: PaymentMethod
+  }
+
+  type WithdrawalDetails {
+    withdrawalId: ID!
+    transactionId: String!
+    userId: String!
+    amount: Float!
+    serviceFee: Float!
+    networkFee: Float!
+    totalFee: Float!
+    payoutAmount: Float!
+    status: WithdrawalStatus!
+    wallet: PaymentMethod!
+    createdAt: String!
+    processedAt: String
+  }
+
+  type UserWithdrawResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    withdrawal: WithdrawalDetails
   }
 
   type BuyCodesbyAnonResponse {
@@ -289,6 +380,7 @@ export const walletsTypeDefs = `#graphql
   extend type Mutation {
     userDeposit(input: UserDepositInput!): UserDepositResponse!
     addWalletOptions(input: AddWalletOptionInput!): AddWalletOptionResponse!
+    userWithdraw(amount: Float!): UserWithdrawResponse!
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
     buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
     reviewOrder(orderId: ID!, type: ReviewType!): ReviewOrderResponse!
