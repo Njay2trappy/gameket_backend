@@ -2194,6 +2194,10 @@ export const walletsMutations = {
       });
     }
 
+    if (context.user.role === "admin") {
+      return { code: 403, success: false, message: "Admin token is not allowed for user withdrawals", withdrawal: null };
+    }
+
     if (context.user.isSuspended) {
       return { code: 403, success: false, message: "Your account is suspended. You cannot make withdrawals.", withdrawal: null };
     }
@@ -2204,7 +2208,7 @@ export const walletsMutations = {
 
     const withdrawalAmount = parseFloat(amount.toFixed(2));
     const serviceFee = parseFloat((withdrawalAmount * 0.01).toFixed(2));
-    const networkFee = parseFloat((withdrawalAmount * 0.005).toFixed(2));
+    const networkFee = 0.5;
     const totalFee = parseFloat((serviceFee + networkFee).toFixed(2));
     const payoutAmount = parseFloat((withdrawalAmount - totalFee).toFixed(2));
 
