@@ -239,6 +239,7 @@ async function buildUserNotificationSummary(
         icon,
       };
     })
+    .filter((conflict) => conflict.unreadMessagesCount > 0)
     .sort((a, b) => {
       if (b.unreadMessagesCount !== a.unreadMessagesCount) {
         return b.unreadMessagesCount - a.unreadMessagesCount;
@@ -249,10 +250,10 @@ async function buildUserNotificationSummary(
       return bTime.localeCompare(aTime);
     });
 
-  let newConflictMessagesCount = 0;
-  for (const conflict of conflictNotifications) {
-    newConflictMessagesCount += conflict.unreadMessagesCount;
-  }
+  const newConflictMessagesCount = conflictNotifications.reduce(
+    (sum, conflict) => sum + conflict.unreadMessagesCount,
+    0
+  );
 
   const totalUnreadCount = newOrdersCount + newTransactionsCount + newConflictMessagesCount;
 
