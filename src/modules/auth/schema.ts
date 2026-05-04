@@ -24,6 +24,8 @@ export const authTypeDefs = `#graphql
     message: String!
     token: String
     user: User
+    requiresTwoFactor: Boolean!
+    twoFactorToken: String
   }
 
   input UpdatePasswordInput {
@@ -44,6 +46,32 @@ export const authTypeDefs = `#graphql
     message: String!
     user: User
     twoFactorAuth: Boolean
+  }
+
+  type TwoFactorSetupData {
+    otpAuthUrl: String!
+    qrCodeDataUrl: String!
+    manualEntryKey: String!
+  }
+
+  type TwoFactorSetupResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    setup: TwoFactorSetupData
+  }
+
+  input VerifyTwoFactorSetupInput {
+    code: String!
+  }
+
+  input DisableTwoFactorAuthInput {
+    code: String!
+  }
+
+  input VerifyTwoFactorLoginInput {
+    twoFactorToken: String!
+    code: String!
   }
 
   input SendVerificationInput {
@@ -77,7 +105,11 @@ export const authTypeDefs = `#graphql
     register(input: RegisterInput!): RegisterResponse!
     login(input: LoginInput!): LoginResponse!
     googleSignIn(input: GoogleSignInInput!): LoginResponse!
+    verifyTwoFactorLogin(input: VerifyTwoFactorLoginInput!): LoginResponse!
     updatePassword(input: UpdatePasswordInput!): UpdatePasswordResponse!
+    beginTwoFactorSetup: TwoFactorSetupResponse!
+    verifyTwoFactorSetup(input: VerifyTwoFactorSetupInput!): UpdateTwoFactorAuthResponse!
+    disableTwoFactorAuth(input: DisableTwoFactorAuthInput!): UpdateTwoFactorAuthResponse!
     updateTwoFactorAuth: UpdateTwoFactorAuthResponse!
     sendVerification(input: SendVerificationInput!): SendVerificationResponse!
     completeVerification(input: CompleteVerificationInput!): CompleteVerificationResponse!

@@ -19,6 +19,9 @@ export interface Account {
   password: string | null;
   authProvider: "email" | "google";
   twoFactorAuth: boolean;
+  twoFactorSecret?: string | null;
+  twoFactorTempSecret?: string | null;
+  twoFactorEnabledAt?: string | null;
   lastLogin: string | null;
   tokenVersion: number;
   otp: string | null;
