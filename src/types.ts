@@ -113,6 +113,21 @@ export interface Withdrawal {
   processedBy: string | null;
 }
 
+export interface NotificationState {
+  userId: string;
+  ordersSeenAt: string;
+  transactionsSeenAt: string;
+  conflictSeenAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationConflictRead {
+  userId: string;
+  disputeId: string;
+  seenAt: string;
+  updatedAt: string;
+}
+
 export interface Product {
   userId: string;
   storeId: string;

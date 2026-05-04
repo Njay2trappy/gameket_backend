@@ -1,7 +1,7 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal } from "../../types.js";
+import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal, NotificationState, NotificationConflictRead } from "../../types.js";
 import type { Context } from "../../index.js";
 
 function getRankFromSales(totalSales: number): number {
@@ -148,6 +148,128 @@ function buildMonthlyBalanceChangeSeries(
   return points;
 }
 
+const DEFAULT_NOTIFICATION_SEEN_AT = "1970-01-01T00:00:00.000Z";
+
+function getDefaultNotificationState(userId: string): NotificationState {
+  return {
+    userId,
+    ordersSeenAt: DEFAULT_NOTIFICATION_SEEN_AT,
+    transactionsSeenAt: DEFAULT_NOTIFICATION_SEEN_AT,
+    conflictSeenAt: DEFAULT_NOTIFICATION_SEEN_AT,
+    updatedAt: DEFAULT_NOTIFICATION_SEEN_AT,
+  };
+}
+
+async function buildUserNotificationSummary(
+  walletsDB: ReturnType<typeof getWalletsDB>,
+  userId: string,
+  state: NotificationState
+) {
+  const ordersSeenAt = state.ordersSeenAt || DEFAULT_NOTIFICATION_SEEN_AT;
+  const transactionsSeenAt = state.transactionsSeenAt || DEFAULT_NOTIFICATION_SEEN_AT;
+  const conflictSeenAt = state.conflictSeenAt || DEFAULT_NOTIFICATION_SEEN_AT;
+  const globalConflictSeenMs = (() => {
+    const ms = new Date(conflictSeenAt).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  })();
+
+  const newOrdersCount = await walletsDB.collection<Order>("Orders").countDocuments({
+    $or: [{ buyerId: userId }, { sellerId: userId }],
+    createdAt: { $gt: ordersSeenAt },
+  });
+
+  const newTransactionsCount = await walletsDB.collection<Transaction>("Transactions").countDocuments({
+    userId,
+    createdAt: { $gt: transactionsSeenAt },
+  });
+
+  const disputes = await walletsDB.collection<Dispute>("Disputes").find({
+    $or: [{ buyerId: userId }, { sellerId: userId }],
+    "messages.0": { $exists: true },
+  }).toArray();
+
+  const disputeIds = disputes.map((dispute) => dispute.disputeId);
+  const conflictReads = disputeIds.length
+    ? await walletsDB.collection<NotificationConflictRead>("NotificationConflictReads").find({
+        userId,
+        disputeId: { $in: disputeIds },
+      }).toArray()
+    : [];
+  const conflictReadMap = new Map(conflictReads.map((item) => [item.disputeId, item.seenAt || DEFAULT_NOTIFICATION_SEEN_AT]));
+
+  const conflictNotifications = disputes
+    .map((dispute) => {
+      const messages = dispute.messages || [];
+      const disputeSeenAt = conflictReadMap.get(dispute.disputeId) || DEFAULT_NOTIFICATION_SEEN_AT;
+      const disputeSeenMs = (() => {
+        const ms = new Date(disputeSeenAt).getTime();
+        return Number.isFinite(ms) ? ms : 0;
+      })();
+      const effectiveConflictSeenMs = Math.max(globalConflictSeenMs, disputeSeenMs);
+      let unreadMessagesCount = 0;
+
+      for (const message of messages) {
+        if (message.senderId === userId) continue;
+        const sentAtMs = new Date(message.sentAt).getTime();
+        if (!Number.isFinite(sentAtMs)) continue;
+        if (sentAtMs > effectiveConflictSeenMs) {
+          unreadMessagesCount += 1;
+        }
+      }
+
+      const lastMessageNode = messages[messages.length - 1] || null;
+      const lastMessage = lastMessageNode?.message || null;
+      const lastMessageAt = lastMessageNode?.sentAt || null;
+
+      const icon = unreadMessagesCount > 0
+        ? "NEW_MESSAGE"
+        : dispute.status === "resolved"
+          ? "RESOLVED"
+          : dispute.status === "closed"
+            ? "CLOSED"
+            : "IN_PROGRESS";
+
+      return {
+        disputeId: dispute.disputeId,
+        orderId: dispute.orderId,
+        status: dispute.status,
+        unreadMessagesCount,
+        lastMessage,
+        lastMessageAt,
+        icon,
+      };
+    })
+    .sort((a, b) => {
+      if (b.unreadMessagesCount !== a.unreadMessagesCount) {
+        return b.unreadMessagesCount - a.unreadMessagesCount;
+      }
+
+      const aTime = a.lastMessageAt || "";
+      const bTime = b.lastMessageAt || "";
+      return bTime.localeCompare(aTime);
+    });
+
+  let newConflictMessagesCount = 0;
+  for (const conflict of conflictNotifications) {
+    newConflictMessagesCount += conflict.unreadMessagesCount;
+  }
+
+  const totalUnreadCount = newOrdersCount + newTransactionsCount + newConflictMessagesCount;
+
+  return {
+    badgeCount: totalUnreadCount > 0 ? 1 : 0,
+    hasUnread: totalUnreadCount > 0,
+    totalUnreadCount,
+    newOrdersCount,
+    newTransactionsCount,
+    newConflictMessagesCount,
+    conflictNotifications,
+    ordersSeenAt,
+    transactionsSeenAt,
+    conflictSeenAt,
+  };
+}
+
 export const walletsQueries = {
   getUserWallets: async (_: unknown, __: unknown, context: Context) => {
     if (!context.user) {
@@ -180,6 +302,29 @@ export const walletsQueries = {
         suspendedBalance: parseFloat(balance.suspendedBalance.toFixed(2)),
         methods: balance.methods,
       },
+    };
+  },
+
+  getUserNotificationSummary: async (_: unknown, __: unknown, context: Context) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const walletsDB = getWalletsDB();
+
+    const state = await walletsDB.collection<NotificationState>("NotificationStates").findOne({ userId })
+      || getDefaultNotificationState(userId);
+
+    const summary = await buildUserNotificationSummary(walletsDB, userId, state);
+
+    return {
+      code: 200,
+      success: true,
+      message: "Notification summary retrieved successfully",
+      summary,
     };
   },
 
@@ -1713,6 +1858,150 @@ export const walletsQueries = {
 };
 
 export const walletsMutations = {
+  markConflictNotificationAsSeen: async (
+    _: unknown,
+    { disputeId }: { disputeId: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const walletsDB = getWalletsDB();
+
+    const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({
+      disputeId,
+      $or: [{ buyerId: userId }, { sellerId: userId }],
+    });
+
+    if (!dispute) {
+      return {
+        code: 404,
+        success: false,
+        message: "Conflict not found",
+        summary: {
+          badgeCount: 0,
+          hasUnread: false,
+          totalUnreadCount: 0,
+          newOrdersCount: 0,
+          newTransactionsCount: 0,
+          newConflictMessagesCount: 0,
+          conflictNotifications: [],
+          ordersSeenAt: DEFAULT_NOTIFICATION_SEEN_AT,
+          transactionsSeenAt: DEFAULT_NOTIFICATION_SEEN_AT,
+          conflictSeenAt: DEFAULT_NOTIFICATION_SEEN_AT,
+        },
+      };
+    }
+
+    const nowMs = Date.now();
+    const latestIncomingMessageMs = (() => {
+      let latest = 0;
+      for (const message of dispute.messages || []) {
+        if (message.senderId === userId) continue;
+        const sentAtMs = new Date(message.sentAt).getTime();
+        if (Number.isFinite(sentAtMs) && sentAtMs > latest) {
+          latest = sentAtMs;
+        }
+      }
+      return latest;
+    })();
+
+    // Use the newest incoming message timestamp so this conflict reliably clears.
+    const seenAt = new Date(Math.max(nowMs, latestIncomingMessageMs)).toISOString();
+    await walletsDB.collection<NotificationConflictRead>("NotificationConflictReads").updateOne(
+      { userId, disputeId },
+      {
+        $set: {
+          seenAt,
+          updatedAt: seenAt,
+        },
+        $setOnInsert: {
+          userId,
+          disputeId,
+        },
+      },
+      { upsert: true }
+    );
+
+    const state = await walletsDB.collection<NotificationState>("NotificationStates").findOne({ userId })
+      || getDefaultNotificationState(userId);
+
+    const summary = await buildUserNotificationSummary(walletsDB, userId, state);
+
+    return {
+      code: 200,
+      success: true,
+      message: "Conflict notification marked as seen",
+      summary,
+    };
+  },
+
+  markNotificationAsSeen: async (
+    _: unknown,
+    { section }: { section?: "all" | "orders" | "transactions" | "conflicts" },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const walletsDB = getWalletsDB();
+    const now = new Date().toISOString();
+    const target = section || "all";
+
+    const setFields: Partial<NotificationState> = { updatedAt: now };
+
+    if (target === "all" || target === "orders") {
+      setFields.ordersSeenAt = now;
+    }
+    if (target === "all" || target === "transactions") {
+      setFields.transactionsSeenAt = now;
+    }
+    if (target === "all" || target === "conflicts") {
+      setFields.conflictSeenAt = now;
+    }
+
+    // Avoid Mongo path conflicts: a field cannot appear in both $set and $setOnInsert.
+    const setOnInsertFields: Partial<NotificationState> = { userId };
+    if (setFields.ordersSeenAt == null) {
+      setOnInsertFields.ordersSeenAt = DEFAULT_NOTIFICATION_SEEN_AT;
+    }
+    if (setFields.transactionsSeenAt == null) {
+      setOnInsertFields.transactionsSeenAt = DEFAULT_NOTIFICATION_SEEN_AT;
+    }
+    if (setFields.conflictSeenAt == null) {
+      setOnInsertFields.conflictSeenAt = DEFAULT_NOTIFICATION_SEEN_AT;
+    }
+
+    await walletsDB.collection<NotificationState>("NotificationStates").updateOne(
+      { userId },
+      {
+        $set: setFields,
+        $setOnInsert: setOnInsertFields,
+      },
+      { upsert: true }
+    );
+
+    const state = await walletsDB.collection<NotificationState>("NotificationStates").findOne({ userId })
+      || getDefaultNotificationState(userId);
+
+    const summary = await buildUserNotificationSummary(walletsDB, userId, state);
+
+    return {
+      code: 200,
+      success: true,
+      message: "Notification marker updated successfully",
+      summary,
+    };
+  },
+
   userDeposit: async (
     _: unknown,
     { input }: { input: { amount: number } },

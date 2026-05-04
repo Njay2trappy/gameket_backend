@@ -255,11 +255,56 @@ export const walletsTypeDefs = `#graphql
     releasableFunds: ReleasableFundsForecast!
   }
 
+  enum NotificationSeenSection {
+    all
+    orders
+    transactions
+    conflicts
+  }
+
+  enum ConflictNotificationIcon {
+    NEW_MESSAGE
+    IN_PROGRESS
+    RESOLVED
+    CLOSED
+  }
+
+  type ConflictNotificationItem {
+    disputeId: ID!
+    orderId: String!
+    status: DisputeStatus!
+    unreadMessagesCount: Int!
+    lastMessage: String
+    lastMessageAt: String
+    icon: ConflictNotificationIcon!
+  }
+
+  type UserNotificationSummary {
+    badgeCount: Int!
+    hasUnread: Boolean!
+    totalUnreadCount: Int!
+    newOrdersCount: Int!
+    newTransactionsCount: Int!
+    newConflictMessagesCount: Int!
+    conflictNotifications: [ConflictNotificationItem!]!
+    ordersSeenAt: String!
+    transactionsSeenAt: String!
+    conflictSeenAt: String!
+  }
+
+  type UserNotificationSummaryResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    summary: UserNotificationSummary!
+  }
+
   extend type Query {
     getUserWallets: GetUserWalletsResponse!
     getUserTransactions(id: ID, first: Int, after: String, last: Int, before: String): GetUserTransactionsResponse!
     getUserOrders(id: ID, first: Int, after: String, last: Int, before: String): GetUserOrdersResponse!
     getUserAnalysis: GetUserAnalysisResponse!
+    getUserNotificationSummary: UserNotificationSummaryResponse!
     getOrder(id: ID!): GetOrderResponse!
     getUserReviews(first: Int, after: String, last: Int, before: String): GetUserReviewsResponse!
     getStoreReviews(storeId: ID!, category: String!, first: Int, after: String, last: Int, before: String): GetStoreReviewsResponse!
@@ -381,6 +426,8 @@ export const walletsTypeDefs = `#graphql
     userDeposit(input: UserDepositInput!): UserDepositResponse!
     addWalletOptions(input: AddWalletOptionInput!): AddWalletOptionResponse!
     userWithdraw(amount: Float!): UserWithdrawResponse!
+    markNotificationAsSeen(section: NotificationSeenSection = all): UserNotificationSummaryResponse!
+    markConflictNotificationAsSeen(disputeId: ID!): UserNotificationSummaryResponse!
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
     buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
     reviewOrder(orderId: ID!, type: ReviewType!): ReviewOrderResponse!
