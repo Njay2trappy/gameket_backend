@@ -102,31 +102,48 @@ router.post("/webhook/deposit", async (req, res) => {
     if (status === "completed") {
       const catalogsDB = getCatalogsDB();
       const product = await catalogsDB.collection<Product>("Products").findOne({ productId: deposit.productId });
+      const availableStock = product
+        ? (product.type === "Manual" ? product.available : product.availableCodes.length)
+        : 0;
 
-      if (!product || product.availableCodes.length < deposit.quantity) {
+      if (!product || availableStock < deposit.quantity) {
         await walletsDB.collection<Deposit>("Deposits").updateOne(
           { payId: txnid },
           { $set: { status: "failed" } }
         );
-        res.status(400).json({ success: false, message: "Product codes no longer available" });
+        res.status(400).json({ success: false, message: "Product stock no longer available" });
         return;
       }
 
       const quantity = deposit.quantity;
-      const purchasedCodes = product.availableCodes.slice(0, quantity);
-      const remainingCodes = product.availableCodes.slice(quantity);
+      const purchasedCodes = product.type === "Manual"
+        ? []
+        : product.availableCodes.slice(0, quantity);
+      const remainingCodes = product.type === "Manual"
+        ? product.availableCodes
+        : product.availableCodes.slice(quantity);
       const now = new Date().toISOString();
       const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-      // Move codes from available to sold
-      await catalogsDB.collection<Product>("Products").updateOne(
-        { productId: deposit.productId },
-        {
-          $set: { availableCodes: remainingCodes },
-          $push: { soldCodes: { $each: purchasedCodes } },
-          $inc: { available: -quantity, sold: quantity },
-        }
-      );
+      if (product.type === "Manual") {
+        await catalogsDB.collection<Product>("Products").updateOne(
+          { productId: deposit.productId },
+          {
+            $inc: { available: -quantity, sold: quantity },
+            $set: { isActive: (product.available - quantity) > 0 },
+          }
+        );
+      } else {
+        // Move codes from available to sold
+        await catalogsDB.collection<Product>("Products").updateOne(
+          { productId: deposit.productId },
+          {
+            $set: { availableCodes: remainingCodes },
+            $push: { soldCodes: { $each: purchasedCodes } },
+            $inc: { available: -quantity, sold: quantity },
+          }
+        );
+      }
 
       // Update store total sales
       const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(

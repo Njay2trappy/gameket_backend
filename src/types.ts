@@ -150,7 +150,21 @@ export interface Product {
   type: "Auto" | "Manual";
   availableCodes: string[];
   soldCodes: string[];
+  manualOrderConfig?: ProductManualOrderConfig | null;
   createdAt: string;
+}
+
+export interface ProductManualWorkingDay {
+  day: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
+  openTime: string;
+  closeTime: string;
+}
+
+export interface ProductManualOrderConfig {
+  isadditional: boolean;
+  characterCount: number | null;
+  orderDescription: string | null;
+  workingDays: ProductManualWorkingDay[];
 }
 
 export interface PromotedProduct {

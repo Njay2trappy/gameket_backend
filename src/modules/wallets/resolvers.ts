@@ -38,6 +38,20 @@ function decodeCursor(cursor: string): number {
   return parseInt(decoded.replace("cursor:", ""), 10);
 }
 
+function mapManualOrderConfig(config: Product["manualOrderConfig"]) {
+  if (!config) return null;
+  return {
+    isadditional: Boolean(config.isadditional),
+    characterCount: config.characterCount ?? null,
+    orderDescription: config.orderDescription ?? null,
+    workingDays: (config.workingDays || []).map((entry) => ({
+      day: entry.day,
+      openTime: entry.openTime,
+      closeTime: entry.closeTime,
+    })),
+  };
+}
+
 function buildMessagesConnection(messages: DisputeMessage[]) {
   const reversed = [...messages].reverse();
   const edges = reversed.map((m, i) => ({
@@ -484,6 +498,7 @@ export const walletsQueries = {
             available: product.available,
             sold: product.sold,
             type: product.type,
+            manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
             createdAt: product.createdAt,
             store: store ? {
               storeId: store.storeId,
@@ -559,6 +574,7 @@ export const walletsQueries = {
           available: product.available,
           sold: product.sold,
           type: product.type,
+          manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
           createdAt: product.createdAt,
           store: store ? {
             storeId: store.storeId,
@@ -673,6 +689,7 @@ export const walletsQueries = {
             available: product.available,
             sold: product.sold,
             type: product.type,
+            manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
             createdAt: product.createdAt,
             store: store ? {
               storeId: store.storeId,
@@ -827,6 +844,7 @@ export const walletsQueries = {
             available: product.available,
             sold: product.sold,
             type: product.type,
+            manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
             createdAt: product.createdAt,
             store: store ? {
               storeId: store.storeId,
@@ -1576,6 +1594,7 @@ export const walletsQueries = {
               available: product.available,
               sold: product.sold,
               type: product.type,
+              manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
               createdAt: product.createdAt,
               store: store ? {
                 storeId: store.storeId,
@@ -2374,9 +2393,11 @@ export const walletsMutations = {
       return { code: 403, success: false, message: "You are blocked from purchasing from this store", order: null, transaction: null };
     }
 
-    // Check enough codes available
-    if (product.availableCodes.length < quantity) {
-      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, order: null, transaction: null };
+    const availableStock = product.type === "Manual" ? product.available : product.availableCodes.length;
+    const stockLabel = product.type === "Manual" ? "slot(s)" : "code(s)";
+
+    if (availableStock < quantity) {
+      return { code: 400, success: false, message: `Only ${availableStock} ${stockLabel} available`, order: null, transaction: null };
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
@@ -2389,9 +2410,12 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Insufficient balance", order: null, transaction: null };
     }
 
-    // Take the codes from the front of availableCodes (still encrypted)
-    const purchasedCodes = product.availableCodes.slice(0, quantity);
-    const remainingCodes = product.availableCodes.slice(quantity);
+    const purchasedCodes = product.type === "Manual"
+      ? []
+      : product.availableCodes.slice(0, quantity);
+    const remainingCodes = product.type === "Manual"
+      ? product.availableCodes
+      : product.availableCodes.slice(quantity);
 
     // Debit buyer (total including fee)
     await walletsDB.collection<Balance>("Balances").updateOne(
@@ -2405,15 +2429,25 @@ export const walletsMutations = {
       { $inc: { suspendedBalance: amount } }
     );
 
-    // Update product: move codes from available to sold, update counts
-    await catalogsDB.collection<Product>("Products").updateOne(
-      { productId },
-      {
-        $set: { availableCodes: remainingCodes },
-        $push: { soldCodes: { $each: purchasedCodes } },
-        $inc: { available: -quantity, sold: quantity },
-      }
-    );
+    if (product.type === "Manual") {
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId },
+        {
+          $inc: { available: -quantity, sold: quantity },
+          $set: { isActive: (product.available - quantity) > 0 },
+        }
+      );
+    } else {
+      // Update product: move codes from available to sold, update counts
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId },
+        {
+          $set: { availableCodes: remainingCodes },
+          $push: { soldCodes: { $each: purchasedCodes } },
+          $inc: { available: -quantity, sold: quantity },
+        }
+      );
+    }
 
     // Update store total sales
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
@@ -2519,6 +2553,7 @@ export const walletsMutations = {
           available: product.available - quantity,
           sold: product.sold + quantity,
           type: product.type,
+          manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
           createdAt: product.createdAt,
           store: updatedStore ? {
             storeId: updatedStore.storeId,
@@ -2622,8 +2657,11 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "This store is not approved", ...errorResponse };
     }
 
-    if (product.availableCodes.length < quantity) {
-      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, ...errorResponse };
+    const availableStock = product.type === "Manual" ? product.available : product.availableCodes.length;
+    const stockLabel = product.type === "Manual" ? "slot(s)" : "code(s)";
+
+    if (availableStock < quantity) {
+      return { code: 400, success: false, message: `Only ${availableStock} ${stockLabel} available`, ...errorResponse };
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
@@ -2711,6 +2749,7 @@ export const walletsMutations = {
           available: product.available,
           sold: product.sold,
           type: product.type,
+          manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
           createdAt: product.createdAt,
           store: {
             storeId: store.storeId,

@@ -3,7 +3,21 @@ import { allGroups } from "../../../data/categories/index.js";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
-import type { Product, PromotedProduct, PromotedStore, Store, User, Balance, Transaction, VerificationRequest, Order, Review, Blacklist } from "../../types.js";
+import type {
+  Product,
+  PromotedProduct,
+  PromotedStore,
+  Store,
+  User,
+  Balance,
+  Transaction,
+  VerificationRequest,
+  Order,
+  Review,
+  Blacklist,
+  ProductManualOrderConfig,
+  ProductManualWorkingDay,
+} from "../../types.js";
 import type { Context } from "../../index.js";
 import countryData from "../../../data/country.json";
 import bcrypt from "bcryptjs";
@@ -29,6 +43,18 @@ const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
 
 // Verification image limits
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+const MAX_PRODUCT_DESCRIPTION_LENGTH = 3000;
+const MAX_MANUAL_ORDER_DESCRIPTION_LENGTH = 2000;
+const MANUAL_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const VALID_WORKING_DAYS: ProductManualWorkingDay["day"][] = [
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY",
+  "SUNDAY",
+];
 const ALLOWED_IMAGE_SIGNATURES: Record<string, string> = {
   "/9j/": "image/jpeg",
   iVBORw0KGgo: "image/png",
@@ -117,6 +143,46 @@ function decodeCursor(cursor: string): number {
   return parseInt(decoded.replace("cursor:", ""), 10);
 }
 
+function mapManualOrderConfig(config: ProductManualOrderConfig | null | undefined) {
+  if (!config) return null;
+  return {
+    isadditional: Boolean(config.isadditional),
+    characterCount: config.characterCount ?? null,
+    orderDescription: config.orderDescription ?? null,
+    workingDays: (config.workingDays || []).map((day) => ({
+      day: day.day,
+      openTime: day.openTime,
+      closeTime: day.closeTime,
+    })),
+  };
+}
+
+function mapProductDetails(product: Product) {
+  return {
+    productId: product.productId,
+    catalog: product.catalog,
+    category: product.category,
+    region: product.region,
+    name: product.name,
+    description: product.description,
+    marketPrice: product.marketPrice,
+    price: product.price,
+    discount: product.discount,
+    isActive: product.isActive,
+    isPromoted: product.isPromoted,
+    available: product.available,
+    sold: product.sold,
+    type: product.type,
+    manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
+    createdAt: product.createdAt,
+  };
+}
+
+function parseTimeToMinutes(value: string): number {
+  const [hours, minutes] = value.split(":").map((part) => Number(part));
+  return (hours * 60) + minutes;
+}
+
 export const catalogsQueries = {
   getUserProducts: async (
     _: unknown,
@@ -158,23 +224,7 @@ export const catalogsQueries = {
         success: true,
         message: "Product retrieved successfully",
         user,
-        product: {
-          productId: p.productId,
-          catalog: p.catalog,
-          category: p.category,
-          region: p.region,
-          name: p.name,
-          description: p.description,
-          marketPrice: p.marketPrice,
-          price: p.price,
-          discount: p.discount,
-          isActive: p.isActive,
-          isPromoted: p.isPromoted,
-          available: p.available,
-          sold: p.sold,
-          type: p.type,
-          createdAt: p.createdAt,
-        },
+        product: mapProductDetails(p),
         products: null,
       };
     }
@@ -201,23 +251,7 @@ export const catalogsQueries = {
 
     const edges = sliced.map((p, i) => ({
       cursor: encodeCursor(start + i),
-      node: {
-        productId: p.productId,
-        catalog: p.catalog,
-        category: p.category,
-        region: p.region,
-        name: p.name,
-        description: p.description,
-        marketPrice: p.marketPrice,
-        price: p.price,
-        discount: p.discount,
-        isActive: p.isActive,
-        isPromoted: p.isPromoted,
-        available: p.available,
-        sold: p.sold,
-        type: p.type,
-        createdAt: p.createdAt,
-      },
+      node: mapProductDetails(p),
     }));
 
     return {
@@ -368,23 +402,7 @@ export const catalogsQueries = {
 
     const edges = sliced.map((p, i) => ({
       cursor: encodeCursor(start + i),
-      node: {
-        productId: p.productId,
-        catalog: p.catalog,
-        category: p.category,
-        region: p.region,
-        name: p.name,
-        description: p.description,
-        marketPrice: p.marketPrice,
-        price: p.price,
-        discount: p.discount,
-        isActive: p.isActive,
-        isPromoted: p.isPromoted,
-        available: p.available,
-        sold: p.sold,
-        type: p.type,
-        createdAt: p.createdAt,
-      },
+      node: mapProductDetails(p),
     }));
 
     return {
@@ -676,21 +694,7 @@ export const catalogsQueries = {
     const mapProduct = (p: Product) => {
       const s = storeMap.get(p.userId);
       return {
-        productId: p.productId,
-        catalog: p.catalog,
-        category: p.category,
-        region: p.region,
-        name: p.name,
-        description: p.description,
-        marketPrice: p.marketPrice,
-        price: p.price,
-        discount: p.discount,
-        isActive: p.isActive,
-        isPromoted: p.isPromoted,
-        available: p.available,
-        sold: p.sold,
-        type: p.type,
-        createdAt: p.createdAt,
+        ...mapProductDetails(p),
         store: s
           ? {
               storeId: s.storeId,
@@ -966,21 +970,7 @@ export const catalogsQueries = {
     const mapProduct = (p: Product) => {
       const s = storeMap.get(p.userId);
       return {
-        productId: p.productId,
-        catalog: p.catalog,
-        category: p.category,
-        region: p.region,
-        name: p.name,
-        description: p.description,
-        marketPrice: p.marketPrice,
-        price: p.price,
-        discount: p.discount,
-        isActive: p.isActive,
-        isPromoted: p.isPromoted,
-        available: p.available,
-        sold: p.sold,
-        type: p.type,
-        createdAt: p.createdAt,
+        ...mapProductDetails(p),
         store: s
           ? {
               storeId: s.storeId,
@@ -1105,21 +1095,7 @@ export const catalogsQueries = {
       success: true,
       message: "Product retrieved successfully",
       product: {
-        productId: product.productId,
-        catalog: product.catalog,
-        category: product.category,
-        region: product.region,
-        name: product.name,
-        description: product.description,
-        marketPrice: product.marketPrice,
-        price: product.price,
-        discount: product.discount,
-        isActive: product.isActive,
-        isPromoted: product.isPromoted,
-        available: product.available,
-        sold: product.sold,
-        type: product.type,
-        createdAt: product.createdAt,
+        ...mapProductDetails(product),
         reviews: productReviews,
         store: store
           ? {
@@ -1180,23 +1156,7 @@ export const catalogsQueries = {
 
     const edges = sliced.map((p, i) => ({
       cursor: encodeCursor(start + i),
-      node: {
-        productId: p.productId,
-        catalog: p.catalog,
-        category: p.category,
-        region: p.region,
-        name: p.name,
-        description: p.description,
-        marketPrice: p.marketPrice,
-        price: p.price,
-        discount: p.discount,
-        isActive: p.isActive,
-        isPromoted: p.isPromoted,
-        available: p.available,
-        sold: p.sold,
-        type: p.type,
-        createdAt: p.createdAt,
-      },
+      node: mapProductDetails(p),
     }));
 
     return {
@@ -1502,8 +1462,13 @@ export const catalogsMutations = {
     if (description.length === 0) {
       return { code: 400, success: false, message: "Description is required", product: null };
     }
-    if (description.length > 1500) {
-      return { code: 400, success: false, message: "Description must be at most 1500 characters", product: null };
+    if (description.length > MAX_PRODUCT_DESCRIPTION_LENGTH) {
+      return {
+        code: 400,
+        success: false,
+        message: `Description must be at most ${MAX_PRODUCT_DESCRIPTION_LENGTH} characters`,
+        product: null,
+      };
     }
     if (marketPrice <= 0) {
       return { code: 400, success: false, message: "Market price must be greater than 0", product: null };
@@ -1564,6 +1529,7 @@ export const catalogsMutations = {
       sold: 0,
       availableCodes: [],
       soldCodes: [],
+      manualOrderConfig: null,
       createdAt: new Date().toISOString(),
     };
 
@@ -1574,23 +1540,7 @@ export const catalogsMutations = {
       success: true,
       message: "Product added successfully",
       user,
-      product: {
-        productId: product.productId,
-        catalog: product.catalog,
-        category: product.category,
-        region: product.region,
-        name: product.name,
-        description: product.description,
-        marketPrice: product.marketPrice,
-        price: product.price,
-        discount: product.discount,
-        isActive: product.isActive,
-        isPromoted: product.isPromoted,
-        available: product.available,
-        sold: product.sold,
-        type: product.type,
-        createdAt: product.createdAt,
-      },
+      product: mapProductDetails(product),
     };
   },
 
@@ -1623,6 +1573,15 @@ export const catalogsMutations = {
       return { code: 404, success: false, message: "Product not found or does not belong to you", available: null };
     }
 
+    if (product.type === "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "Manual products do not accept code strings. Use addProductManualcodes instead",
+        available: null,
+      };
+    }
+
     // Encrypt each code
     const encryptedCodes = codes.map((code) => encrypt(code.trim()));
 
@@ -1642,6 +1601,164 @@ export const catalogsMutations = {
       message: `${encryptedCodes.length} code(s) added successfully`,
       user,
       available: product.available + encryptedCodes.length,
+    };
+  },
+
+  addProductManualcodes: async (
+    _: unknown,
+    {
+      input,
+    }: {
+      input: {
+        productId: string;
+        quantity: number;
+        isadditional: boolean;
+        characterCount?: number;
+        orderDescription?: string;
+        workingDays?: Array<{ day: ProductManualWorkingDay["day"]; openTime: string; closeTime: string }>;
+      };
+    },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const userId = context.user.userId;
+    const { productId, quantity, isadditional } = input;
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return { code: 400, success: false, message: "Quantity must be a positive integer", user: null, available: null, product: null };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can add manual product stock", user: null, available: null, product: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you", user, available: null, product: null };
+    }
+
+    if (product.type !== "Manual") {
+      return { code: 400, success: false, message: "This mutation is only for Manual products", user, available: null, product: null };
+    }
+
+    const workingDaysInput = input.workingDays || [];
+    const seenDays = new Set<ProductManualWorkingDay["day"]>();
+    const workingDays: ProductManualWorkingDay[] = [];
+
+    for (const dayEntry of workingDaysInput) {
+      const day = String(dayEntry.day || "").toUpperCase() as ProductManualWorkingDay["day"];
+      const openTime = String(dayEntry.openTime || "").trim();
+      const closeTime = String(dayEntry.closeTime || "").trim();
+
+      if (!VALID_WORKING_DAYS.includes(day)) {
+        return { code: 400, success: false, message: "Invalid working day provided", user, available: null, product: null };
+      }
+
+      if (seenDays.has(day)) {
+        return { code: 400, success: false, message: `Duplicate working day: ${day}`, user, available: null, product: null };
+      }
+
+      if (!MANUAL_TIME_PATTERN.test(openTime) || !MANUAL_TIME_PATTERN.test(closeTime)) {
+        return {
+          code: 400,
+          success: false,
+          message: `Working day time must be in 24-hour HH:MM format for ${day}`,
+          user,
+          available: null,
+          product: null,
+        };
+      }
+
+      if (parseTimeToMinutes(closeTime) <= parseTimeToMinutes(openTime)) {
+        return { code: 400, success: false, message: `Close time must be after open time for ${day}`, user, available: null, product: null };
+      }
+
+      seenDays.add(day);
+      workingDays.push({ day, openTime, closeTime });
+    }
+
+    let characterCount: number | null = null;
+    let orderDescription: string | null = null;
+
+    if (isadditional) {
+      const rawOrderDescription = (input.orderDescription || "").trim();
+      if (rawOrderDescription.length === 0) {
+        return {
+          code: 400,
+          success: false,
+          message: "orderDescription is required when isadditional is true",
+          user,
+          available: null,
+          product: null,
+        };
+      }
+
+      if (rawOrderDescription.length > MAX_MANUAL_ORDER_DESCRIPTION_LENGTH) {
+        return {
+          code: 400,
+          success: false,
+          message: `orderDescription must be at most ${MAX_MANUAL_ORDER_DESCRIPTION_LENGTH} characters`,
+          user,
+          available: null,
+          product: null,
+        };
+      }
+
+      if (input.characterCount != null) {
+        if (!Number.isInteger(input.characterCount) || input.characterCount <= 0) {
+          return { code: 400, success: false, message: "characterCount must be a positive integer", user, available: null, product: null };
+        }
+        characterCount = input.characterCount;
+      }
+
+      orderDescription = rawOrderDescription;
+    } else if (input.characterCount != null || (input.orderDescription || "").trim().length > 0) {
+      return {
+        code: 400,
+        success: false,
+        message: "characterCount and orderDescription can only be used when isadditional is true",
+        user,
+        available: null,
+        product: null,
+      };
+    }
+
+    const manualOrderConfig: ProductManualOrderConfig = {
+      isadditional,
+      characterCount,
+      orderDescription,
+      workingDays,
+    };
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      {
+        $inc: { available: quantity },
+        $set: {
+          isActive: true,
+          manualOrderConfig,
+        },
+      }
+    );
+
+    const updated = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: `${quantity} manual order slot(s) added successfully`,
+      user,
+      available: (updated?.available ?? product.available + quantity),
+      product: updated ? mapProductDetails(updated) : null,
     };
   },
 
@@ -1671,6 +1788,15 @@ export const catalogsMutations = {
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
     if (!product) {
       return { code: 404, success: false, message: "Product not found or does not belong to you", available: null };
+    }
+
+    if (product.type === "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "Manual products do not store code strings",
+        available: null,
+      };
     }
 
     if (!product.availableCodes.length) {
@@ -1714,6 +1840,105 @@ export const catalogsMutations = {
     };
   },
 
+  deleteProductManualcodes: async (
+    _: unknown,
+    { input }: { input: { productId: string; quantity: number } },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const userId = context.user.userId;
+    const { productId, quantity } = input;
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return {
+        code: 400,
+        success: false,
+        message: "Quantity must be a positive integer",
+        user: null,
+        available: null,
+        fulfilledManualOrders: null,
+        product: null,
+      };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return {
+        code: 403,
+        success: false,
+        message: "Only sellers can delete manual product stock",
+        user: null,
+        available: null,
+        fulfilledManualOrders: null,
+        product: null,
+      };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return {
+        code: 404,
+        success: false,
+        message: "Product not found or does not belong to you",
+        user,
+        available: null,
+        fulfilledManualOrders: null,
+        product: null,
+      };
+    }
+
+    if (product.type !== "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "This mutation is only for Manual products. Use deleteProductCodes for Auto products",
+        user,
+        available: null,
+        fulfilledManualOrders: null,
+        product: null,
+      };
+    }
+
+    if (product.available < quantity) {
+      return {
+        code: 400,
+        success: false,
+        message: `Only ${product.available} manual slot(s) available to delete`,
+        user,
+        available: product.available,
+        fulfilledManualOrders: product.sold,
+        product: mapProductDetails(product),
+      };
+    }
+
+    const newAvailable = product.available - quantity;
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      { $set: { available: newAvailable, isActive: newAvailable > 0 } }
+    );
+
+    const updated = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: `${quantity} manual order slot(s) deleted successfully`,
+      user,
+      available: updated?.available ?? newAvailable,
+      fulfilledManualOrders: updated?.sold ?? product.sold,
+      product: updated ? mapProductDetails(updated) : null,
+    };
+  },
+
   updateProduct: async (
     _: unknown,
     { input }: { input: { productId: string; description?: string; marketPrice?: number; price?: number } },
@@ -1746,8 +1971,13 @@ export const catalogsMutations = {
       if (description.length === 0) {
         return { code: 400, success: false, message: "Description cannot be empty", product: null };
       }
-      if (description.length > 1500) {
-        return { code: 400, success: false, message: "Description must be at most 1500 characters", product: null };
+      if (description.length > MAX_PRODUCT_DESCRIPTION_LENGTH) {
+        return {
+          code: 400,
+          success: false,
+          message: `Description must be at most ${MAX_PRODUCT_DESCRIPTION_LENGTH} characters`,
+          product: null,
+        };
       }
       updates.description = description;
     }
@@ -1792,22 +2022,7 @@ export const catalogsMutations = {
       success: true,
       message: "Product updated successfully",
       user,
-      product: {
-        productId: updated!.productId,
-        catalog: updated!.catalog,
-        category: updated!.category,
-        region: updated!.region,
-        name: updated!.name,
-        description: updated!.description,
-        marketPrice: updated!.marketPrice,
-        price: updated!.price,
-        discount: updated!.discount,
-        isActive: updated!.isActive,
-        isPromoted: updated!.isPromoted,
-        available: updated!.available,
-        sold: updated!.sold,
-        createdAt: updated!.createdAt,
-      },
+      product: updated ? mapProductDetails(updated) : null,
     };
   },
 
@@ -1886,21 +2101,8 @@ export const catalogsMutations = {
       message: "Product disabled successfully",
       user,
       product: {
-        productId: product.productId,
-        catalog: product.catalog,
-        category: product.category,
-        region: product.region,
-        name: product.name,
-        description: product.description,
-        marketPrice: product.marketPrice,
-        price: product.price,
-        discount: product.discount,
+        ...mapProductDetails(product),
         isActive: false,
-        isPromoted: product.isPromoted,
-        available: product.available,
-        sold: product.sold,
-        type: product.type,
-        createdAt: product.createdAt,
       },
     };
   },
@@ -1940,7 +2142,7 @@ export const catalogsMutations = {
     }
 
     if (product.available <= 0) {
-      return { code: 400, success: false, message: "Product has no available codes and cannot be enabled" };
+      return { code: 400, success: false, message: "Product has no available stock and cannot be enabled" };
     }
 
     if (product.isActive) {
@@ -1958,21 +2160,8 @@ export const catalogsMutations = {
       message: "Product enabled successfully",
       user,
       product: {
-        productId: product.productId,
-        catalog: product.catalog,
-        category: product.category,
-        region: product.region,
-        name: product.name,
-        description: product.description,
-        marketPrice: product.marketPrice,
-        price: product.price,
-        discount: product.discount,
+        ...mapProductDetails(product),
         isActive: true,
-        isPromoted: product.isPromoted,
-        available: product.available,
-        sold: product.sold,
-        type: product.type,
-        createdAt: product.createdAt,
       },
     };
   },
@@ -2084,21 +2273,8 @@ export const catalogsMutations = {
         campaignEnd: promotion.campaignEnd,
         createdAt: promotion.createdAt,
         product: {
-          productId: product.productId,
-          catalog: product.catalog,
-          category: product.category,
-          region: product.region,
-          name: product.name,
-          description: product.description,
-          marketPrice: product.marketPrice,
-          price: product.price,
-          discount: product.discount,
-          isActive: product.isActive,
+          ...mapProductDetails(product),
           isPromoted: true,
-          available: product.available,
-          sold: product.sold,
-          type: product.type,
-          createdAt: product.createdAt,
         },
       },
     };

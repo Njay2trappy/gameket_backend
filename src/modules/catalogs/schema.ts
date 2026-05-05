@@ -23,6 +23,16 @@ export const catalogsTypeDefs = `#graphql
     Other
   }
 
+  enum WorkingDay {
+    MONDAY
+    TUESDAY
+    WEDNESDAY
+    THURSDAY
+    FRIDAY
+    SATURDAY
+    SUNDAY
+  }
+
   type StoreDetails {
     storeId: ID!
     storeName: String!
@@ -197,9 +207,23 @@ export const catalogsTypeDefs = `#graphql
     available: Int!
     sold: Int!
     type: ProductType!
+    manualOrderConfig: ManualOrderConfig
     createdAt: String!
     store: StoreDetails
     reviews: [ReviewDetails!]
+  }
+
+  type ManualOrderWorkingDay {
+    day: WorkingDay!
+    openTime: String!
+    closeTime: String!
+  }
+
+  type ManualOrderConfig {
+    isadditional: Boolean!
+    characterCount: Int
+    orderDescription: String
+    workingDays: [ManualOrderWorkingDay!]!
   }
 
   type GetProductsEdge {
@@ -289,6 +313,7 @@ export const catalogsTypeDefs = `#graphql
     available: Int!
     sold: Int!
     type: ProductType!
+    manualOrderConfig: ManualOrderConfig
     createdAt: String!
   }
 
@@ -316,6 +341,21 @@ export const catalogsTypeDefs = `#graphql
     codes: [String!]!
   }
 
+  input ManualOrderWorkingDayInput {
+    day: WorkingDay!
+    openTime: String!
+    closeTime: String!
+  }
+
+  input AddProductManualcodesInput {
+    productId: ID!
+    quantity: Int!
+    isadditional: Boolean!
+    characterCount: Int
+    orderDescription: String
+    workingDays: [ManualOrderWorkingDayInput!]
+  }
+
   type AddProductCodesResponse {
     code: Int!
     success: Boolean!
@@ -324,9 +364,23 @@ export const catalogsTypeDefs = `#graphql
     available: Int
   }
 
+  type AddProductManualcodesResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    available: Int
+    product: ProductDetails
+  }
+
   input DeleteProductCodesInput {
     productId: ID!
     codes: [String!]!
+  }
+
+  input DeleteProductManualcodesInput {
+    productId: ID!
+    quantity: Int!
   }
 
   type DeleteProductCodesResponse {
@@ -335,6 +389,16 @@ export const catalogsTypeDefs = `#graphql
     message: String!
     user: User
     available: Int
+  }
+
+  type DeleteProductManualcodesResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    available: Int
+    fulfilledManualOrders: Int
+    product: ProductDetails
   }
 
   input UpdateProductInput {
@@ -518,7 +582,9 @@ export const catalogsTypeDefs = `#graphql
     disableProduct(productId: ID!): DeleteProductResponse!
     enableProduct(productId: ID!): DeleteProductResponse!
     addProductCodes(input: AddProductCodesInput!): AddProductCodesResponse!
+    addProductManualcodes(input: AddProductManualcodesInput!): AddProductManualcodesResponse!
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
+    deleteProductManualcodes(input: DeleteProductManualcodesInput!): DeleteProductManualcodesResponse!
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!
     advertiseStore(input: AdvertiseStoreInput!): AdvertiseStoreResponse!
     requestStoreAccess(input: RequestStoreAccessInput!): RequestStoreAccessResponse!
