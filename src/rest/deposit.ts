@@ -119,9 +119,11 @@ router.post("/webhook/deposit", async (req, res) => {
       const purchasedCodes = product.type === "Manual"
         ? []
         : product.availableCodes.slice(0, quantity);
-      const remainingCodes = product.type === "Manual"
+      const isManual = product.type === "Manual";
+      const remainingCodes = isManual
         ? product.availableCodes
         : product.availableCodes.slice(quantity);
+      const orderStatus = isManual ? "billed" : "completed";
       const now = new Date().toISOString();
       const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
@@ -174,7 +176,7 @@ router.post("/webhook/deposit", async (req, res) => {
         userId: deposit.sellerId,
         id: sellerTransactionId,
         type: "SoldCodes",
-        status: "pending",
+        status: isManual ? "billed" : "pending",
         method: "balance",
         amount: deposit.amount,
         createdAt: now,
@@ -197,12 +199,13 @@ router.post("/webhook/deposit", async (req, res) => {
         amount: deposit.amount,
         fee: deposit.fee,
         totalAmount: deposit.totalCharged,
-        status: "completed",
+        status: orderStatus,
         type: "anonpurchase",
         isReviewed: false,
         reviewType: null,
         isReleased: false,
         disputeReason: null,
+        datainput: deposit.datainput ?? null,
         createdAt: now,
         releasedAt,
       };

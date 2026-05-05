@@ -717,6 +717,7 @@ export const walletsQueries = {
           isReleased: order.isReleased,
           reviewType: order.reviewType ?? null,
           disputeReason: order.disputeReason ?? null,
+          datainput: order.datainput ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -872,6 +873,7 @@ export const walletsQueries = {
           isReleased: order.isReleased,
           reviewType: order.reviewType ?? null,
           disputeReason: order.disputeReason ?? null,
+          datainput: order.datainput ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -1037,7 +1039,7 @@ export const walletsQueries = {
     const sevenDaysMs = 7 * oneDayMs;
 
     const rawReleasableOrders = orders
-      .filter((order) => order.sellerId === userId && !order.isReleased && order.status === "completed")
+      .filter((order) => order.sellerId === userId && !order.isReleased && (order.status === "completed" || order.status === "pending"))
       .map((order) => {
         const releaseDate = new Date(order.releasedAt);
         if (isNaN(releaseDate.getTime())) return null;
@@ -2372,6 +2374,16 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Product is not available", order: null, transaction: null };
     }
 
+    if (product.type === "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "This is a manual product. Use buyCodesManualbyUser for manual orders",
+        order: null,
+        transaction: null,
+      };
+    }
+
     // Check store is active and approved
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
     if (!store || !store.isActive) {
@@ -2393,11 +2405,8 @@ export const walletsMutations = {
       return { code: 403, success: false, message: "You are blocked from purchasing from this store", order: null, transaction: null };
     }
 
-    const availableStock = product.type === "Manual" ? product.available : product.availableCodes.length;
-    const stockLabel = product.type === "Manual" ? "slot(s)" : "code(s)";
-
-    if (availableStock < quantity) {
-      return { code: 400, success: false, message: `Only ${availableStock} ${stockLabel} available`, order: null, transaction: null };
+    if (product.availableCodes.length < quantity) {
+      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, order: null, transaction: null };
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
@@ -2410,12 +2419,8 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Insufficient balance", order: null, transaction: null };
     }
 
-    const purchasedCodes = product.type === "Manual"
-      ? []
-      : product.availableCodes.slice(0, quantity);
-    const remainingCodes = product.type === "Manual"
-      ? product.availableCodes
-      : product.availableCodes.slice(quantity);
+    const purchasedCodes = product.availableCodes.slice(0, quantity);
+    const remainingCodes = product.availableCodes.slice(quantity);
 
     // Debit buyer (total including fee)
     await walletsDB.collection<Balance>("Balances").updateOne(
@@ -2429,25 +2434,15 @@ export const walletsMutations = {
       { $inc: { suspendedBalance: amount } }
     );
 
-    if (product.type === "Manual") {
-      await catalogsDB.collection<Product>("Products").updateOne(
-        { productId },
-        {
-          $inc: { available: -quantity, sold: quantity },
-          $set: { isActive: (product.available - quantity) > 0 },
-        }
-      );
-    } else {
-      // Update product: move codes from available to sold, update counts
-      await catalogsDB.collection<Product>("Products").updateOne(
-        { productId },
-        {
-          $set: { availableCodes: remainingCodes },
-          $push: { soldCodes: { $each: purchasedCodes } },
-          $inc: { available: -quantity, sold: quantity },
-        }
-      );
-    }
+    // Update product: move codes from available to sold, update counts
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId },
+      {
+        $set: { availableCodes: remainingCodes },
+        $push: { soldCodes: { $each: purchasedCodes } },
+        $inc: { available: -quantity, sold: quantity },
+      }
+    );
 
     // Update store total sales
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
@@ -2581,6 +2576,273 @@ export const walletsMutations = {
         isReleased: order.isReleased,
         reviewType: order.reviewType ?? null,
         disputeReason: order.disputeReason ?? null,
+        datainput: order.datainput ?? null,
+        createdAt: order.createdAt,
+        releasedAt: order.releasedAt,
+        store: updatedStore ? {
+          storeId: updatedStore.storeId,
+          storeName: updatedStore.storeName,
+          isActive: updatedStore.isActive,
+          isApproved: updatedStore.isApproved,
+          approveStatus: updatedStore.approveStatus,
+          isPromoted: updatedStore.isPromoted,
+          type: updatedStore.type,
+          totalSales: updatedStore.totalSales,
+          positiveReviews: updatedStore.positiveReviews,
+          negativeReviews: updatedStore.negativeReviews,
+          registered: updatedStore.createdAt,
+          requestCount: updatedStore.requestCount,
+        } : null,
+        transaction: {
+          id: transaction.id,
+          type: transaction.type,
+          status: transaction.status,
+          method: transaction.method,
+          amount: transaction.amount,
+          createdAt: transaction.createdAt,
+        },
+      },
+      transaction: {
+        id: transaction.id,
+        type: transaction.type,
+        status: transaction.status,
+        method: transaction.method,
+        amount: transaction.amount,
+        createdAt: transaction.createdAt,
+      },
+    };
+  },
+
+  buyCodesManualbyUser: async (
+    _: unknown,
+    { productId, quantity, datainput }: { productId: string; quantity: number; datainput?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+
+    if (context.user.isSuspended) {
+      return { code: 403, success: false, message: "Your account is suspended. You cannot make purchases.", order: null, transaction: null };
+    }
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return { code: 400, success: false, message: "Quantity must be a positive integer", order: null, transaction: null };
+    }
+
+    const cleanDataInput = typeof datainput === "string" ? datainput.trim() : "";
+    if (cleanDataInput.length > 2000) {
+      return { code: 400, success: false, message: "datainput must be at most 2000 characters", order: null, transaction: null };
+    }
+
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", order: null, transaction: null };
+    }
+
+    if (!user.isVerified) {
+      return { code: 403, success: false, message: "Please verify your account before making a purchase", order: null, transaction: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found", order: null, transaction: null };
+    }
+
+    if (product.type !== "Manual") {
+      return { code: 400, success: false, message: "This mutation only supports Manual products", order: null, transaction: null };
+    }
+
+    if (!product.isActive) {
+      return { code: 400, success: false, message: "Product is not available", order: null, transaction: null };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
+    if (!store || !store.isActive) {
+      return { code: 400, success: false, message: "This store is currently unavailable", order: null, transaction: null };
+    }
+
+    if (!store.isApproved) {
+      return { code: 400, success: false, message: "This store is not approved", order: null, transaction: null };
+    }
+
+    if (product.userId === userId) {
+      return { code: 403, success: false, message: "You cannot purchase your own product", order: null, transaction: null };
+    }
+
+    const isBlacklisted = await catalogsDB.collection<Blacklist>("Blacklists").findOne({ storeId: product.storeId, userId });
+    if (isBlacklisted) {
+      return { code: 403, success: false, message: "You are blocked from purchasing from this store", order: null, transaction: null };
+    }
+
+    if (product.available < quantity) {
+      return { code: 400, success: false, message: `Only ${product.available} slot(s) available`, order: null, transaction: null };
+    }
+
+    const amount = parseFloat((product.price * quantity).toFixed(2));
+    const fee = parseFloat(Math.max(amount * 0.005, 0.1).toFixed(2));
+    const totalAmount = parseFloat((amount + fee).toFixed(2));
+
+    const buyerBalance = await walletsDB.collection<Balance>("Balances").findOne({ userId });
+    if (!buyerBalance || buyerBalance.availableBalance < totalAmount) {
+      return { code: 400, success: false, message: "Insufficient balance", order: null, transaction: null };
+    }
+
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId },
+      { $inc: { availableBalance: -totalAmount } }
+    );
+
+    await walletsDB.collection<Balance>("Balances").updateOne(
+      { userId: product.userId },
+      { $inc: { suspendedBalance: amount } }
+    );
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId },
+      {
+        $inc: { available: -quantity, sold: quantity },
+        $set: { isActive: (product.available - quantity) > 0 },
+      }
+    );
+
+    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+      { storeId: product.storeId },
+      { $inc: { totalSales: quantity } },
+      { returnDocument: "after" }
+    );
+
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: product.userId },
+        { $set: { rank: newRank } }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const transactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+
+    const transaction: Transaction = {
+      userId,
+      id: transactionId,
+      type: "ProductPurchase",
+      status: "billed",
+      method: "balance",
+      amount: totalAmount,
+      createdAt: now,
+    };
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne(transaction);
+
+    const sellerTransactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+
+    const sellerTransaction: Transaction = {
+      userId: product.userId,
+      id: sellerTransactionId,
+      type: "SoldCodes",
+      status: "billed",
+      method: "balance",
+      amount,
+      createdAt: now,
+    };
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne(sellerTransaction);
+
+    const orderId = randomBytes(36).toString("base64").replace(/[+/=]/g, "");
+
+    const order: Order = {
+      orderId,
+      buyerId: userId,
+      buyerName: user.username,
+      sellerId: product.userId,
+      storeId: product.storeId,
+      productId,
+      buyerTransactionId: transactionId,
+      sellerTransactionId,
+      codes: [],
+      quantity,
+      amount,
+      fee,
+      totalAmount,
+      status: "billed",
+      type: "userpurchase",
+      isReviewed: false,
+      reviewType: null,
+      isReleased: false,
+      disputeReason: null,
+      datainput: cleanDataInput.length ? cleanDataInput : null,
+      createdAt: now,
+      releasedAt,
+    };
+
+    await walletsDB.collection<Order>("Orders").insertOne(order);
+
+    return {
+      code: 200,
+      success: true,
+      message: "Manual order purchase successful",
+      user,
+      order: {
+        orderId: order.orderId,
+        buyerId: order.buyerId,
+        buyerName: user.username,
+        sellerId: order.sellerId,
+        sellerName: store?.storeName || "",
+        storeId: order.storeId,
+        product: {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: product.isPromoted,
+          available: product.available - quantity,
+          sold: product.sold + quantity,
+          type: product.type,
+          manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
+          createdAt: product.createdAt,
+          store: updatedStore ? {
+            storeId: updatedStore.storeId,
+            storeName: updatedStore.storeName,
+            isActive: updatedStore.isActive,
+            isApproved: updatedStore.isApproved,
+            approveStatus: updatedStore.approveStatus,
+            isPromoted: updatedStore.isPromoted,
+            type: updatedStore.type,
+            totalSales: updatedStore.totalSales,
+            positiveReviews: updatedStore.positiveReviews,
+            negativeReviews: updatedStore.negativeReviews,
+            registered: updatedStore.createdAt,
+            requestCount: updatedStore.requestCount,
+          } : null,
+        },
+        codes: [],
+        amount: order.amount,
+        fee: order.fee,
+        totalAmount: order.totalAmount,
+        status: order.status,
+        type: order.type,
+        action: "buy",
+        isReviewed: order.isReviewed,
+        isReleased: order.isReleased,
+        reviewType: order.reviewType ?? null,
+        disputeReason: order.disputeReason ?? null,
+        datainput: order.datainput ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: updatedStore ? {
@@ -2648,6 +2910,15 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Product is not available", ...errorResponse };
     }
 
+    if (product.type === "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "This product is Manual. Use buyCodesManualbyAnon instead",
+        ...errorResponse,
+      };
+    }
+
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
     if (!store || !store.isActive) {
       return { code: 400, success: false, message: "This store is currently unavailable", ...errorResponse };
@@ -2657,11 +2928,8 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "This store is not approved", ...errorResponse };
     }
 
-    const availableStock = product.type === "Manual" ? product.available : product.availableCodes.length;
-    const stockLabel = product.type === "Manual" ? "slot(s)" : "code(s)";
-
-    if (availableStock < quantity) {
-      return { code: 400, success: false, message: `Only ${availableStock} ${stockLabel} available`, ...errorResponse };
+    if (product.availableCodes.length < quantity) {
+      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, ...errorResponse };
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
@@ -2803,6 +3071,558 @@ export const walletsMutations = {
     };
   },
 
+  buyCodesManualbyAnon: async (
+    _: unknown,
+    { productId, quantity, email, datainput }: { productId: string; quantity: number; email: string; datainput?: string }
+  ) => {
+    const errorResponse = { order: null, deposit: null, payId: null, paymentLink: null };
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return { code: 400, success: false, message: "Quantity must be a positive integer", ...errorResponse };
+    }
+
+    if (quantity > 2) {
+      return { code: 400, success: false, message: "Maximum quantity is 2", ...errorResponse };
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return { code: 400, success: false, message: "Invalid email address", ...errorResponse };
+    }
+
+    const cleanDataInput = typeof datainput === "string" ? datainput.trim() : "";
+    if (cleanDataInput.length > 2000) {
+      return { code: 400, success: false, message: "datainput must be at most 2000 characters", ...errorResponse };
+    }
+
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found", ...errorResponse };
+    }
+
+    if (product.type !== "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "This mutation only supports Manual products",
+        ...errorResponse,
+      };
+    }
+
+    if (!product.isActive) {
+      return { code: 400, success: false, message: "Product is not available", ...errorResponse };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
+    if (!store || !store.isActive) {
+      return { code: 400, success: false, message: "This store is currently unavailable", ...errorResponse };
+    }
+
+    if (!store.isApproved) {
+      return { code: 400, success: false, message: "This store is not approved", ...errorResponse };
+    }
+
+    if (product.available < quantity) {
+      return { code: 400, success: false, message: `Only ${product.available} slot(s) available`, ...errorResponse };
+    }
+
+    const amount = parseFloat((product.price * quantity).toFixed(2));
+    const networkFee = parseFloat((amount * 0.002).toFixed(2));
+    const serviceFee = parseFloat(Math.max(amount * 0.005, 0.1).toFixed(2));
+    const fee = parseFloat((serviceFee + networkFee).toFixed(2));
+    const totalAmount = parseFloat((amount + fee).toFixed(2));
+
+    const apiKey = process.env.GAMEKET_PAY_API_KEY;
+    if (!apiKey) {
+      throw new Error("Server configuration error");
+    }
+
+    let paymentResponse;
+    try {
+      const res = await fetch("https://api.pay.gameket.io/create-payment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, amount: totalAmount }),
+      });
+
+      paymentResponse = await res.json();
+
+      if (!res.ok) {
+        return { code: res.status, success: false, message: "Payment service error", ...errorResponse };
+      }
+    } catch {
+      return { code: 502, success: false, message: "Unable to reach payment service", ...errorResponse };
+    }
+
+    const now = new Date().toISOString();
+    const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const transactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+    const payId = String(paymentResponse.transaction?.txnid || "");
+    const paymentLink = String(paymentResponse.paymentLink || "");
+
+    const orderId = randomBytes(36).toString("base64").replace(/[+/=]/g, "");
+    const buyerName = `Guest-${randomBytes(3).toString("hex")}`;
+
+    // Create deposit record (order is created in webhook after payment completes)
+    const depositRecord: Deposit = {
+      userId: email,
+      payId,
+      transactionId,
+      orderId,
+      paymentMethod: "Webcheckout",
+      paymentLink,
+      amount,
+      fee,
+      totalCharged: totalAmount,
+      status: "pending",
+      type: "codepurchase",
+      sellerId: product.userId,
+      storeId: product.storeId,
+      productId,
+      quantity,
+      buyerName,
+      datainput: cleanDataInput.length ? cleanDataInput : null,
+    };
+
+    await walletsDB.collection<Deposit>("Deposits").insertOne(depositRecord);
+
+    return {
+      code: 200,
+      success: true,
+      message: "Payment initiated",
+      order: {
+        orderId,
+        buyerId: "anon-gameket-id",
+        buyerName,
+        sellerId: product.userId,
+        sellerName: store.storeName,
+        storeId: product.storeId,
+        product: {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: product.isPromoted,
+          available: product.available,
+          sold: product.sold,
+          type: product.type,
+          manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
+          createdAt: product.createdAt,
+          store: {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          },
+        },
+        codes: [],
+        amount,
+        fee,
+        totalAmount,
+        status: "pending",
+        type: "anonpurchase",
+        action: "buy",
+        isReviewed: false,
+        reviewType: null,
+        datainput: cleanDataInput.length ? cleanDataInput : null,
+        createdAt: now,
+        releasedAt,
+        store: {
+          storeId: store.storeId,
+          storeName: store.storeName,
+          isActive: store.isActive,
+          isApproved: store.isApproved,
+          approveStatus: store.approveStatus,
+          isPromoted: store.isPromoted,
+          type: store.type,
+          totalSales: store.totalSales,
+          positiveReviews: store.positiveReviews,
+          negativeReviews: store.negativeReviews,
+          registered: store.createdAt,
+          requestCount: store.requestCount,
+        },
+        transaction: null,
+      },
+      deposit: {
+        amount,
+        fee,
+        totalCharged: totalAmount,
+      },
+      payId,
+      paymentLink,
+    };
+  },
+
+  FulfilManualOrder: async (
+    _: unknown,
+    { orderId, action, code, fulfilmentNote, declineReason }: { orderId: string; action: "Confirm" | "Decline"; code?: string; fulfilmentNote?: string; declineReason?: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const userId = context.user.userId;
+    const db = getDB();
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null, order: null, transaction: null };
+    }
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId });
+    if (!order) {
+      return { code: 404, success: false, message: "Order not found", user, order: null, transaction: null };
+    }
+
+    if (order.sellerId !== userId) {
+      return { code: 403, success: false, message: "Only the selling store can fulfil this manual order", user, order: null, transaction: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+    if (!product || product.type !== "Manual") {
+      return { code: 400, success: false, message: "FulfilManualOrder is only available for Manual products", user, order: null, transaction: null };
+    }
+
+    const cleanCode = typeof code === "string" ? code.trim() : "";
+    if (cleanCode.length > 2000) {
+      return { code: 400, success: false, message: "code must be at most 2000 characters", user, order: null, transaction: null };
+    }
+
+    const cleanFulfilmentNote = typeof fulfilmentNote === "string" ? fulfilmentNote.trim() : "";
+    if (cleanFulfilmentNote.length > 2000) {
+      return { code: 400, success: false, message: "fulfilmentNote must be at most 2000 characters", user, order: null, transaction: null };
+    }
+
+    const cleanDeclineReason = typeof declineReason === "string" ? declineReason.trim() : "";
+    if (cleanDeclineReason.length > 2000) {
+      return { code: 400, success: false, message: "declineReason must be at most 2000 characters", user, order: null, transaction: null };
+    }
+
+    if (order.status !== "billed") {
+      const idempotencyMessages: Record<string, string> = {
+        pending: "This order has already been fulfilled and is awaiting buyer release",
+        completed: "This order is already completed and funds have been released",
+        cancelled: "This order has already been declined and cancelled",
+        refunded: "This order has been refunded and cannot be acted on",
+        disputed: "This order is currently under dispute and cannot be fulfilled",
+        partially_refunded: "This order has been partially refunded",
+        failed: "This order has failed and cannot be acted on",
+      };
+      const msg = idempotencyMessages[order.status] ?? `This order cannot be fulfilled. Current status: ${order.status}`;
+      return { code: 409, success: false, message: msg, user, order: null, transaction: null };
+    }
+
+    const now = new Date().toISOString();
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
+    const sellerTransaction = await walletsDB.collection<Transaction>("Transactions").findOne({ id: order.sellerTransactionId });
+
+    if (action === "Confirm") {
+      const nextCodes = cleanCode ? [...order.codes, cleanCode] : order.codes;
+
+      await walletsDB.collection<Order>("Orders").updateOne(
+        { orderId },
+        {
+          $set: {
+            status: "pending",
+            codes: nextCodes,
+            fulfilledAt: now,
+            fulfilledBy: userId,
+            fulfilmentNote: cleanFulfilmentNote.length ? cleanFulfilmentNote : null,
+          },
+        }
+      );
+
+      // Transition transactions out of billed now that order is confirmed
+      if (order.buyerTransactionId) {
+        await walletsDB.collection<Transaction>("Transactions").updateOne(
+          { id: order.buyerTransactionId },
+          { $set: { status: "completed" } }
+        );
+      }
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: order.sellerTransactionId },
+        { $set: { status: "pending" } }
+      );
+
+      return {
+        code: 200,
+        success: true,
+        message: "Manual order fulfilled successfully",
+        user,
+        order: {
+          orderId: order.orderId,
+          buyerId: order.buyerId,
+          buyerName: order.buyerName,
+          sellerId: order.sellerId,
+          sellerName: user.username,
+          storeId: order.storeId,
+          product: {
+            productId: product.productId,
+            catalog: product.catalog,
+            category: product.category,
+            region: product.region,
+            name: product.name,
+            description: product.description,
+            marketPrice: product.marketPrice,
+            price: product.price,
+            discount: product.discount,
+            isActive: product.isActive,
+            isPromoted: product.isPromoted,
+            available: product.available,
+            sold: product.sold,
+            type: product.type,
+            manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
+            createdAt: product.createdAt,
+            store: store ? {
+              storeId: store.storeId,
+              storeName: store.storeName,
+              isActive: store.isActive,
+              isApproved: store.isApproved,
+              approveStatus: store.approveStatus,
+              isPromoted: store.isPromoted,
+              type: store.type,
+              totalSales: store.totalSales,
+              positiveReviews: store.positiveReviews,
+              negativeReviews: store.negativeReviews,
+              registered: store.createdAt,
+              requestCount: store.requestCount,
+            } : null,
+          },
+          codes: nextCodes,
+          amount: order.amount,
+          fee: order.fee,
+          totalAmount: order.totalAmount,
+          status: "pending",
+          type: order.type,
+          action: "sell",
+          isReviewed: order.isReviewed,
+          isReleased: order.isReleased,
+          reviewType: order.reviewType ?? null,
+          disputeReason: order.disputeReason ?? null,
+          datainput: order.datainput ?? null,
+          fulfilledAt: now,
+          fulfilledBy: userId,
+          fulfilmentNote: cleanFulfilmentNote.length ? cleanFulfilmentNote : null,
+          declinedAt: null,
+          declineReason: null,
+          createdAt: order.createdAt,
+          releasedAt: order.releasedAt,
+          store: store ? {
+            storeId: store.storeId,
+            storeName: store.storeName,
+            isActive: store.isActive,
+            isApproved: store.isApproved,
+            approveStatus: store.approveStatus,
+            isPromoted: store.isPromoted,
+            type: store.type,
+            totalSales: store.totalSales,
+            positiveReviews: store.positiveReviews,
+            negativeReviews: store.negativeReviews,
+            registered: store.createdAt,
+            requestCount: store.requestCount,
+          } : null,
+          transaction: sellerTransaction ? {
+            id: sellerTransaction.id,
+            type: sellerTransaction.type,
+            status: sellerTransaction.status,
+            method: sellerTransaction.method,
+            amount: sellerTransaction.amount,
+            createdAt: sellerTransaction.createdAt,
+          } : null,
+        },
+        transaction: sellerTransaction ? {
+          id: sellerTransaction.id,
+          type: sellerTransaction.type,
+          status: sellerTransaction.status,
+          method: sellerTransaction.method,
+          amount: sellerTransaction.amount,
+          createdAt: sellerTransaction.createdAt,
+        } : null,
+      };
+    }
+
+    const isAnonBuyer = order.buyerId === "anon-gameket-id";
+
+    // Reverse buyer balance. Guest orders have no wallet — refund processed manually.
+    if (!isAnonBuyer) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.buyerId },
+        { $inc: { availableBalance: order.totalAmount } }
+      );
+    }
+
+    if (order.isReleased) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { availableBalance: -order.amount } }
+      );
+    } else {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: -order.amount } }
+      );
+    }
+
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.buyerTransactionId },
+      { $set: { status: "refunded" } }
+    );
+
+    await walletsDB.collection<Transaction>("Transactions").updateOne(
+      { id: order.sellerTransactionId },
+      { $set: { status: "refunded" } }
+    );
+
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId },
+      {
+        $set: {
+          status: "cancelled",
+          isReleased: true,
+          codes: cleanCode ? [...order.codes, cleanCode] : order.codes,
+          declinedAt: now,
+          declineReason: cleanDeclineReason.length ? cleanDeclineReason : null,
+        },
+      }
+    );
+
+    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+      { storeId: order.storeId },
+      { $inc: { totalSales: -order.quantity } },
+      { returnDocument: "after" }
+    );
+
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: order.sellerId },
+        { $set: { rank: newRank } }
+      );
+    }
+
+    const sellerTransactionAfter = await walletsDB.collection<Transaction>("Transactions").findOne({ id: order.sellerTransactionId });
+
+    return {
+      code: 200,
+      success: true,
+      message: isAnonBuyer
+        ? "Manual order declined and cancelled. Guest refund must be processed manually."
+        : "Manual order declined and buyer refunded successfully",
+      user,
+      order: {
+        orderId: order.orderId,
+        buyerId: order.buyerId,
+        buyerName: order.buyerName,
+        sellerId: order.sellerId,
+        sellerName: user.username,
+        storeId: order.storeId,
+        product: {
+          productId: product.productId,
+          catalog: product.catalog,
+          category: product.category,
+          region: product.region,
+          name: product.name,
+          description: product.description,
+          marketPrice: product.marketPrice,
+          price: product.price,
+          discount: product.discount,
+          isActive: product.isActive,
+          isPromoted: product.isPromoted,
+          available: product.available,
+          sold: product.sold,
+          type: product.type,
+          manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
+          createdAt: product.createdAt,
+          store: (updatedStore || store) ? {
+            storeId: (updatedStore || store)!.storeId,
+            storeName: (updatedStore || store)!.storeName,
+            isActive: (updatedStore || store)!.isActive,
+            isApproved: (updatedStore || store)!.isApproved,
+            approveStatus: (updatedStore || store)!.approveStatus,
+            isPromoted: (updatedStore || store)!.isPromoted,
+            type: (updatedStore || store)!.type,
+            totalSales: (updatedStore || store)!.totalSales,
+            positiveReviews: (updatedStore || store)!.positiveReviews,
+            negativeReviews: (updatedStore || store)!.negativeReviews,
+            registered: (updatedStore || store)!.createdAt,
+            requestCount: (updatedStore || store)!.requestCount,
+          } : null,
+        },
+        codes: cleanCode ? [...order.codes, cleanCode] : order.codes,
+        amount: order.amount,
+        fee: order.fee,
+        totalAmount: order.totalAmount,
+        status: "cancelled",
+        type: order.type,
+        action: "sell",
+        isReviewed: order.isReviewed,
+        isReleased: true,
+        reviewType: order.reviewType ?? null,
+        disputeReason: order.disputeReason ?? null,
+        datainput: order.datainput ?? null,
+        fulfilledAt: null,
+        fulfilledBy: null,
+        fulfilmentNote: null,
+        declinedAt: now,
+        declineReason: cleanDeclineReason.length ? cleanDeclineReason : null,
+        createdAt: order.createdAt,
+        releasedAt: order.releasedAt,
+        store: (updatedStore || store) ? {
+          storeId: (updatedStore || store)!.storeId,
+          storeName: (updatedStore || store)!.storeName,
+          isActive: (updatedStore || store)!.isActive,
+          isApproved: (updatedStore || store)!.isApproved,
+          approveStatus: (updatedStore || store)!.approveStatus,
+          isPromoted: (updatedStore || store)!.isPromoted,
+          type: (updatedStore || store)!.type,
+          totalSales: (updatedStore || store)!.totalSales,
+          positiveReviews: (updatedStore || store)!.positiveReviews,
+          negativeReviews: (updatedStore || store)!.negativeReviews,
+          registered: (updatedStore || store)!.createdAt,
+          requestCount: (updatedStore || store)!.requestCount,
+        } : null,
+        transaction: sellerTransactionAfter ? {
+          id: sellerTransactionAfter.id,
+          type: sellerTransactionAfter.type,
+          status: sellerTransactionAfter.status,
+          method: sellerTransactionAfter.method,
+          amount: sellerTransactionAfter.amount,
+          createdAt: sellerTransactionAfter.createdAt,
+        } : null,
+      },
+      transaction: sellerTransactionAfter ? {
+        id: sellerTransactionAfter.id,
+        type: sellerTransactionAfter.type,
+        status: sellerTransactionAfter.status,
+        method: sellerTransactionAfter.method,
+        amount: sellerTransactionAfter.amount,
+        createdAt: sellerTransactionAfter.createdAt,
+      } : null,
+    };
+  },
+
   reviewOrder: async (
     _: unknown,
     { orderId, type }: { orderId: string; type: "positive" | "negative" },
@@ -2833,8 +3653,8 @@ export const walletsMutations = {
       return { code: 403, success: false, message: "Only the buyer can review an order", user, review: null };
     }
 
-    if (order.status !== "completed") {
-      return { code: 400, success: false, message: "Only completed orders can be reviewed", user, review: null };
+    if (order.status !== "completed" && order.status !== "pending") {
+      return { code: 400, success: false, message: "Only completed or pending orders can be reviewed", user, review: null };
     }
 
     if (order.isReviewed) {

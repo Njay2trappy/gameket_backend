@@ -37,15 +37,22 @@ export const walletsTypeDefs = `#graphql
   enum OrderStatus {
     pending
     completed
+    billed
     disputed
     refunded
     partially_refunded
+    cancelled
     failed
   }
 
   enum OrderAction {
     buy
     sell
+  }
+
+  enum ManualFulfilAction {
+    Confirm
+    Decline
   }
 
   type OrderDetails {
@@ -67,6 +74,12 @@ export const walletsTypeDefs = `#graphql
     isReleased: Boolean!
     reviewType: ReviewType
     disputeReason: String
+    datainput: String
+    fulfilledAt: String
+    fulfilledBy: String
+    fulfilmentNote: String
+    declinedAt: String
+    declineReason: String
     createdAt: String!
     releasedAt: String!
     store: StoreDetails
@@ -75,6 +88,15 @@ export const walletsTypeDefs = `#graphql
   }
 
   type BuyCodesResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    order: OrderDetails
+    transaction: TransactionDetails
+  }
+
+  type FulfilManualOrderResponse {
     code: Int!
     success: Boolean!
     message: String!
@@ -429,7 +451,10 @@ export const walletsTypeDefs = `#graphql
     markNotificationAsSeen(section: NotificationSeenSection = all): UserNotificationSummaryResponse!
     markConflictNotificationAsSeen(disputeId: ID!): UserNotificationSummaryResponse!
     buyCodesbyUser(productId: ID!, quantity: Int!): BuyCodesResponse!
+    buyCodesManualbyUser(productId: ID!, quantity: Int!, datainput: String): BuyCodesResponse!
     buyCodesbyAnon(productId: ID!, quantity: Int!, email: String!): BuyCodesbyAnonResponse!
+    buyCodesManualbyAnon(productId: ID!, quantity: Int!, email: String!, datainput: String): BuyCodesbyAnonResponse!
+    FulfilManualOrder(orderId: ID!, action: ManualFulfilAction!, code: String, fulfilmentNote: String, declineReason: String): FulfilManualOrderResponse!
     reviewOrder(orderId: ID!, type: ReviewType!): ReviewOrderResponse!
     refundOrder(orderId: ID!, quantity: Int!): RefundOrderResponse!
     disputeOrder(orderId: ID!, reason: String): DisputeOrderResponse!

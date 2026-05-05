@@ -73,6 +73,7 @@ export interface Deposit {
   productId?: string;
   quantity?: number;
   buyerName?: string;
+  datainput?: string | null;
 }
 
 export interface Review {
@@ -245,6 +246,12 @@ export interface Order {
   reviewType: string | null;
   isReleased: boolean;
   disputeReason: string | null;
+  datainput?: string | null;
+  fulfilledAt?: string | null;
+  fulfilledBy?: string | null;
+  fulfilmentNote?: string | null;
+  declinedAt?: string | null;
+  declineReason?: string | null;
   createdAt: string;
   releasedAt: string;
 }
