@@ -2933,7 +2933,7 @@ export const walletsMutations = {
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
-    const networkFee = parseFloat((amount * 0.002).toFixed(2));
+    const networkFee = parseFloat(Math.max(amount * 0.002, 0.1).toFixed(2));
     const serviceFee = parseFloat(Math.max(amount * 0.005, 0.1).toFixed(2));
     const fee = parseFloat((serviceFee + networkFee).toFixed(2));
     const totalAmount = parseFloat((amount + fee).toFixed(2));
@@ -3130,7 +3130,7 @@ export const walletsMutations = {
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
-    const networkFee = parseFloat((amount * 0.002).toFixed(2));
+    const networkFee = parseFloat(Math.max(amount * 0.002, 0.1).toFixed(2));
     const serviceFee = parseFloat(Math.max(amount * 0.005, 0.1).toFixed(2));
     const fee = parseFloat((serviceFee + networkFee).toFixed(2));
     const totalAmount = parseFloat((amount + fee).toFixed(2));
