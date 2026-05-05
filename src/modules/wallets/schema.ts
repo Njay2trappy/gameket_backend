@@ -13,6 +13,7 @@ export const walletsTypeDefs = `#graphql
 
   enum TransactionStatus {
     pending
+    billed
     completed
     failed
     refunded
