@@ -21,12 +21,38 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
 const ALGORITHM = "aes-256-gcm";
 
 function decrypt(encryptedText: string): string {
-  const [ivHex, authTagHex, ciphertext] = encryptedText.split(":");
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, "hex"), Buffer.from(ivHex, "hex"));
-  decipher.setAuthTag(Buffer.from(authTagHex, "hex"));
-  let decrypted = decipher.update(ciphertext, "hex", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
+  // Some manual-order codes are stored as plain text; only decrypt valid encrypted payloads.
+  const parts = encryptedText.split(":");
+  if (parts.length !== 3) {
+    return encryptedText;
+  }
+
+  const [ivHex, authTagHex, ciphertext] = parts;
+  const isHex = (value: string) => /^[0-9a-fA-F]+$/.test(value);
+
+  if (
+    !ivHex ||
+    !authTagHex ||
+    !ciphertext ||
+    ivHex.length !== 24 ||
+    authTagHex.length !== 32 ||
+    ciphertext.length % 2 !== 0 ||
+    !isHex(ivHex) ||
+    !isHex(authTagHex) ||
+    !isHex(ciphertext)
+  ) {
+    return encryptedText;
+  }
+
+  try {
+    const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, "hex"), Buffer.from(ivHex, "hex"));
+    decipher.setAuthTag(Buffer.from(authTagHex, "hex"));
+    let decrypted = decipher.update(ciphertext, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch {
+    return encryptedText;
+  }
 }
 
 function encodeCursor(index: number): string {
