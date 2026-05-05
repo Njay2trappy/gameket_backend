@@ -134,6 +134,9 @@ export const catalogsTypeDefs = `#graphql
     success: Boolean!
     message: String!
     user: User
+    isManualProduct: Boolean!
+    availableCount: Int!
+    soldCount: Int!
     availableCodes: CodeConnection
     soldCodes: CodeConnection
   }

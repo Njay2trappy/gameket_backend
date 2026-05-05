@@ -290,12 +290,32 @@ export const catalogsQueries = {
 
     const user = await db.collection<User>("users").findOne({ id: userId });
     if (!user || !user.isStore) {
-      return { code: 403, success: false, message: "Only sellers can view product codes", availableCodes: null, soldCodes: null };
+      return {
+        code: 403,
+        success: false,
+        message: "Only sellers can view product codes",
+        user: null,
+        isManualProduct: false,
+        availableCount: 0,
+        soldCount: 0,
+        availableCodes: null,
+        soldCodes: null,
+      };
     }
 
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
     if (!product) {
-      return { code: 404, success: false, message: "Product not found or does not belong to you", availableCodes: null, soldCodes: null };
+      return {
+        code: 404,
+        success: false,
+        message: "Product not found or does not belong to you",
+        user,
+        isManualProduct: false,
+        availableCount: 0,
+        soldCount: 0,
+        availableCodes: null,
+        soldCodes: null,
+      };
     }
 
     const allAvailable = product.availableCodes.map((c) => decrypt(c));
@@ -338,11 +358,40 @@ export const catalogsQueries = {
       };
     }
 
+    const emptyCodeConnection = {
+      edges: [] as Array<{ cursor: string; node: string }>,
+      pageInfo: {
+        hasNextPage: false,
+        hasPreviousPage: false,
+        startCursor: null,
+        endCursor: null,
+        fetchedCount: 0,
+        remainingCount: 0,
+      },
+    };
+
+    if (product.type === "Manual") {
+      return {
+        code: 200,
+        success: true,
+        message: `${product.available} manual slot(s) available, ${product.sold} manual order(s) fulfilled`,
+        user,
+        isManualProduct: true,
+        availableCount: product.available,
+        soldCount: product.sold,
+        availableCodes: emptyCodeConnection,
+        soldCodes: emptyCodeConnection,
+      };
+    }
+
     return {
       code: 200,
       success: true,
       message: `${allAvailable.length} available, ${allSold.length} sold`,
       user,
+      isManualProduct: false,
+      availableCount: allAvailable.length,
+      soldCount: allSold.length,
       availableCodes: paginateCodes(allAvailable),
       soldCodes: paginateCodes(allSold),
     };
