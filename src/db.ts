@@ -77,11 +77,11 @@ export async function connectDB(): Promise<Db> {
     { $set: { requestCount: 0 } }
   );
 
-  // Backfill: Manual orders confirmed before status was changed from "pending" to "completed"
-  // Identify them by type "Manual", status "pending", and fulfilledAt being set (meaning Confirm ran)
+  // Backfill: Manual orders that are still stuck in "pending" from older fulfilment behavior
+  // Current manual lifecycle is billed -> completed (or cancelled/refunded), so pending is stale.
   const stalePendingManualOrders = await walletsDb
     .collection("Orders")
-    .find({ type: "Manual", status: "pending", fulfilledAt: { $exists: true, $ne: null } })
+    .find({ type: "Manual", status: "pending" })
     .project({ orderId: 1, buyerId: 1, sellerId: 1 })
     .toArray();
 
