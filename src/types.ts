@@ -252,6 +252,7 @@ export interface Order {
   fulfilmentNote?: string | null;
   declinedAt?: string | null;
   declineReason?: string | null;
+  statusUpdatedAt?: string | null;
   createdAt: string;
   releasedAt: string;
 }

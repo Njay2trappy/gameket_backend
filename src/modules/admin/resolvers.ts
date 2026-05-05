@@ -2463,12 +2463,12 @@ export const adminMutations = {
 
       await walletsDB.collection<Order>("Orders").updateOne(
         { orderId: order.orderId },
-        { $set: { status: "completed", isReleased: true, releasedAt: new Date().toISOString() } }
+        { $set: { status: "completed", isReleased: true, releasedAt: new Date().toISOString(), statusUpdatedAt: new Date().toISOString() } }
       );
     } else if (order.status === "disputed") {
       await walletsDB.collection<Order>("Orders").updateOne(
         { orderId: order.orderId },
-        { $set: { status: "completed" } }
+        { $set: { status: "completed", statusUpdatedAt: new Date().toISOString() } }
       );
     }
 
@@ -2601,7 +2601,7 @@ export const adminMutations = {
 
     await walletsDB.collection<Order>("Orders").updateOne(
       { orderId: order.orderId },
-      { $set: { status: "refunded", isReleased: true } }
+      { $set: { status: "refunded", isReleased: true, statusUpdatedAt: now } }
     );
 
     await walletsDB.collection("RefundOffers").updateMany(

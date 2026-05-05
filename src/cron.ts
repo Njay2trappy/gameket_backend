@@ -242,6 +242,7 @@ export function startCronJobs() {
               isReleased: true,
               declinedAt: now,
               declineReason: "Order expired: seller did not fulfil within 24 hours",
+              statusUpdatedAt: now,
             },
           }
         );

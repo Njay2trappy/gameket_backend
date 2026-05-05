@@ -188,8 +188,13 @@ async function buildUserNotificationSummary(
   })();
 
   const newOrdersCount = await walletsDB.collection<Order>("Orders").countDocuments({
-    $or: [{ buyerId: userId }, { sellerId: userId }],
-    createdAt: { $gt: ordersSeenAt },
+    $and: [
+      { $or: [{ buyerId: userId }, { sellerId: userId }] },
+      { $or: [
+        { createdAt: { $gt: ordersSeenAt } },
+        { statusUpdatedAt: { $gt: ordersSeenAt } },
+      ]},
+    ],
   });
 
   const newTransactionsCount = await walletsDB.collection<Transaction>("Transactions").countDocuments({
@@ -3350,6 +3355,7 @@ export const walletsMutations = {
             fulfilledAt: now,
             fulfilledBy: userId,
             fulfilmentNote: cleanFulfilmentNote.length ? cleanFulfilmentNote : null,
+            statusUpdatedAt: now,
           },
         }
       );
@@ -3504,6 +3510,7 @@ export const walletsMutations = {
           codes: cleanCode ? [...order.codes, cleanCode] : order.codes,
           declinedAt: now,
           declineReason: cleanDeclineReason.length ? cleanDeclineReason : null,
+          statusUpdatedAt: now,
         },
       }
     );
@@ -3870,7 +3877,7 @@ export const walletsMutations = {
       // Mark order as refunded
       await walletsDB.collection<Order>("Orders").updateOne(
         { orderId },
-        { $set: { status: "refunded", isReleased: true } }
+        { $set: { status: "refunded", isReleased: true, statusUpdatedAt: now } }
       );
 
       // If order was disputed, close the dispute
@@ -4074,7 +4081,7 @@ export const walletsMutations = {
     // Mark order as disputed
     await walletsDB.collection<Order>("Orders").updateOne(
       { orderId },
-      { $set: { status: "disputed", disputeReason: reason || null } }
+      { $set: { status: "disputed", disputeReason: reason || null, statusUpdatedAt: now } }
     );
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
@@ -4442,7 +4449,7 @@ export const walletsMutations = {
     // Update order to reflect partial refund and mark as released
     await walletsDB.collection<Order>("Orders").updateOne(
       { orderId: offer.orderId },
-      { $set: { status: "partially_refunded", isReleased: true } }
+      { $set: { status: "partially_refunded", isReleased: true, statusUpdatedAt: now } }
     );
 
     // If order was disputed, close the dispute
