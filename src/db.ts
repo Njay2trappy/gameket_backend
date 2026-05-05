@@ -77,6 +77,40 @@ export async function connectDB(): Promise<Db> {
     { $set: { requestCount: 0 } }
   );
 
+  // Backfill: Manual orders confirmed before status was changed from "pending" to "completed"
+  // Identify them by type "Manual", status "pending", and fulfilledAt being set (meaning Confirm ran)
+  const stalePendingManualOrders = await walletsDb
+    .collection("Orders")
+    .find({ type: "Manual", status: "pending", fulfilledAt: { $exists: true, $ne: null } })
+    .project({ orderId: 1, buyerId: 1, sellerId: 1 })
+    .toArray();
+
+  if (stalePendingManualOrders.length > 0) {
+    const orderIds = stalePendingManualOrders.map((o) => o.orderId);
+    const buyerIds = stalePendingManualOrders.map((o) => o.buyerId);
+    const sellerIds = stalePendingManualOrders.map((o) => o.sellerId);
+
+    // Update orders to "completed"
+    await walletsDb.collection("Orders").updateMany(
+      { orderId: { $in: orderIds } },
+      { $set: { status: "completed", statusUpdatedAt: new Date().toISOString() } }
+    );
+
+    // Update buyer transactions to "completed"
+    await walletsDb.collection("Transactions").updateMany(
+      { orderId: { $in: orderIds }, userId: { $in: buyerIds }, type: "ProductPurchase", status: "pending" },
+      { $set: { status: "completed" } }
+    );
+
+    // Update seller transactions to "pending" (awaiting fund release)
+    await walletsDb.collection("Transactions").updateMany(
+      { orderId: { $in: orderIds }, userId: { $in: sellerIds }, type: "SoldCodes", status: "completed" },
+      { $set: { status: "pending" } }
+    );
+
+    console.log(`✅ Backfilled ${stalePendingManualOrders.length} stale manual order(s) to "completed"`);
+  }
+
   // Backfill transaction type values to match enum
   await walletsDb.collection("Transactions").updateMany(
     { type: "Premium subscription" },

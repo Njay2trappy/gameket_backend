@@ -749,6 +749,11 @@ export const walletsQueries = {
           reviewType: order.reviewType ?? null,
           disputeReason: order.disputeReason ?? null,
           datainput: order.datainput ?? null,
+          fulfilledAt: order.fulfilledAt ?? null,
+          fulfilledBy: order.fulfilledBy ?? null,
+          fulfilmentNote: order.fulfilmentNote ?? null,
+          declinedAt: order.declinedAt ?? null,
+          declineReason: order.declineReason ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -905,6 +910,11 @@ export const walletsQueries = {
           reviewType: order.reviewType ?? null,
           disputeReason: order.disputeReason ?? null,
           datainput: order.datainput ?? null,
+          fulfilledAt: order.fulfilledAt ?? null,
+          fulfilledBy: order.fulfilledBy ?? null,
+          fulfilmentNote: order.fulfilmentNote ?? null,
+          declinedAt: order.declinedAt ?? null,
+          declineReason: order.declineReason ?? null,
           createdAt: order.createdAt,
           releasedAt: order.releasedAt,
           store: store ? {
@@ -2608,6 +2618,11 @@ export const walletsMutations = {
         reviewType: order.reviewType ?? null,
         disputeReason: order.disputeReason ?? null,
         datainput: order.datainput ?? null,
+        fulfilledAt: order.fulfilledAt ?? null,
+        fulfilledBy: order.fulfilledBy ?? null,
+        fulfilmentNote: order.fulfilmentNote ?? null,
+        declinedAt: order.declinedAt ?? null,
+        declineReason: order.declineReason ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: updatedStore ? {
@@ -2874,6 +2889,11 @@ export const walletsMutations = {
         reviewType: order.reviewType ?? null,
         disputeReason: order.disputeReason ?? null,
         datainput: order.datainput ?? null,
+        fulfilledAt: order.fulfilledAt ?? null,
+        fulfilledBy: order.fulfilledBy ?? null,
+        fulfilmentNote: order.fulfilmentNote ?? null,
+        declinedAt: order.declinedAt ?? null,
+        declineReason: order.declineReason ?? null,
         createdAt: order.createdAt,
         releasedAt: order.releasedAt,
         store: updatedStore ? {
@@ -3354,7 +3374,7 @@ export const walletsMutations = {
     if (order.status !== "billed") {
       const idempotencyMessages: Record<string, string> = {
         pending: "This order has already been fulfilled and is awaiting buyer release",
-        completed: "This order is already completed and funds have been released",
+        completed: "This order has already been fulfilled",
         cancelled: "This order has already been declined and cancelled",
         refunded: "This order has been refunded and cannot be acted on",
         disputed: "This order is currently under dispute and cannot be fulfilled",
@@ -3376,7 +3396,7 @@ export const walletsMutations = {
         { orderId },
         {
           $set: {
-            status: "pending",
+            status: "completed",
             codes: nextCodes,
             fulfilledAt: now,
             fulfilledBy: userId,
@@ -3446,7 +3466,7 @@ export const walletsMutations = {
           amount: order.amount,
           fee: order.fee,
           totalAmount: order.totalAmount,
-          status: "pending",
+          status: "completed",
           type: order.type,
           action: "sell",
           isReviewed: order.isReviewed,
