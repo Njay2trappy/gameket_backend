@@ -1,8 +1,64 @@
 import crypto, { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
+import nodemailer from "nodemailer";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal, NotificationState, NotificationConflictRead } from "../../types.js";
 import type { Context } from "../../index.js";
+
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
+
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const formatUsd = (amount: number): string => {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+};
+
+const formatDateTime = (iso: string): string => {
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const renderWithdrawalRequestEmail = (
+  user: User,
+  withdrawal: Withdrawal,
+  availableBalance: number
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "withdrawal-request-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{withdrawalAmount\}\}/g, escapeHtml(formatUsd(withdrawal.amount)))
+    .replace(/\{\{requestId\}\}/g, escapeHtml(withdrawal.withdrawalId))
+    .replace(/\{\{requestedOn\}\}/g, escapeHtml(formatDateTime(withdrawal.createdAt)))
+    .replace(/\{\{payoutMethod\}\}/g, escapeHtml(`${withdrawal.wallet.name} (${withdrawal.wallet.network})`))
+    .replace(/\{\{destinationSummary\}\}/g, escapeHtml(withdrawal.wallet.value))
+    .replace(/\{\{estimatedProcessingTime\}\}/g, "Up to 24 hours")
+    .replace(/\{\{availableBalance\}\}/g, escapeHtml(formatUsd(availableBalance)))
+    .replace(/\{\{withdrawalRequestUrl\}\}/g, escapeHtml("https://shop.gameket.io/user/wallet"))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
 
 function getRankFromSales(totalSales: number): number {
   if (totalSales >= 10000) return 10;
@@ -2349,6 +2405,23 @@ export const walletsMutations = {
 
     await walletsDB.collection<Transaction>("Transactions").insertOne(transactionRecord);
     await walletsDB.collection<Withdrawal>("Withdrawals").insertOne(withdrawalRecord);
+
+    try {
+      const html = renderWithdrawalRequestEmail(
+        user,
+        withdrawalRecord,
+        parseFloat((balance.availableBalance - withdrawalAmount).toFixed(2))
+      );
+
+      await smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Withdrawal Request Received",
+        html,
+      });
+    } catch (error) {
+      console.error("Failed to send withdrawal request email:", error);
+    }
 
     return {
       code: 201,

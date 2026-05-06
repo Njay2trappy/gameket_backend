@@ -1,9 +1,55 @@
 
 import crypto from "crypto";
 import { GraphQLError } from "graphql";
+import nodemailer from "nodemailer";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { getDB, getCatalogsDB, getWalletsDB } from "../../db.js";
 import type { User, Account, Store, Balance, Premium, Transaction, Product } from "../../types.js";
 import type { Context } from "../../index.js";
+
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
+
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const formatDateTime = (iso: string): string => {
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const renderPremiumSubscriptionEmail = (
+  user: User,
+  activatedOn: string,
+  nextBillingDate: string
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "premium-subscription-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{activatedOn\}\}/g, escapeHtml(formatDateTime(activatedOn)))
+    .replace(/\{\{nextBillingDate\}\}/g, escapeHtml(formatDateTime(nextBillingDate)))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
 
 export const userFieldResolvers = {
   isSuspended: (parent: Record<string, unknown>) => {
@@ -289,6 +335,23 @@ export const usersMutations = {
     };
 
     await walletsDB.collection<Transaction>("Transactions").insertOne(transaction);
+
+    try {
+      const html = renderPremiumSubscriptionEmail(
+        user,
+        now.toISOString(),
+        expiresAt.toISOString()
+      );
+
+      await smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Premium Subscription Activated",
+        html,
+      });
+    } catch (error) {
+      console.error("Failed to send premium subscription email:", error);
+    }
 
     return {
       code: 200,

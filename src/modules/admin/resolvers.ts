@@ -41,6 +41,77 @@ const renderWelcomeEmail = (user: User): string => {
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const formatUsd = (amount: number): string => {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+};
+
+const formatDateTime = (iso: string): string => {
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const renderIfBlock = (template: string, key: string, include: boolean): string => {
+  const blockRegex = new RegExp(`\\{\\{#if\\s+${key}\\}\\}([\\s\\S]*?)\\{\\{\\/if\\}\\}`, "g");
+  return template.replace(blockRegex, include ? "$1" : "");
+};
+
+const renderWithdrawalStatusUpdateEmail = (
+  user: User,
+  withdrawal: Withdrawal,
+  nextStatus: "approved" | "declined"
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "withdrawal-status-update-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+  const statusReason = nextStatus === "approved"
+    ? "Your withdrawal has been approved and is being processed for payout."
+    : "Your withdrawal could not be processed. Please review your payout details and try again.";
+
+  template = renderIfBlock(template, "isDeclined", nextStatus === "declined");
+  template = renderIfBlock(template, "isFailed", false);
+
+  if (nextStatus === "approved") {
+    const statusCellRegex = new RegExp('(<p class="meta-label">Status</p>)[\\s\\S]*?(</td>)');
+    template = template.replace(
+      statusCellRegex,
+      `$1\n                                    <p class=\"status-pill\">Approved</p>\n                                  $2`
+    );
+  }
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{withdrawalAmount\}\}/g, escapeHtml(formatUsd(withdrawal.amount)))
+    .replace(/\{\{requestId\}\}/g, escapeHtml(withdrawal.withdrawalId))
+    .replace(/\{\{updatedOn\}\}/g, escapeHtml(formatDateTime(withdrawal.processedAt || new Date().toISOString())))
+    .replace(/\{\{payoutMethod\}\}/g, escapeHtml(`${withdrawal.wallet.name} (${withdrawal.wallet.network})`))
+    .replace(/\{\{destinationSummary\}\}/g, escapeHtml(withdrawal.wallet.value))
+    .replace(/\{\{statusReason\}\}/g, escapeHtml(statusReason))
+    .replace(/\{\{resubmitWithdrawalUrl\}\}/g, escapeHtml("https://shop.gameket.io/user/wallet"))
+    .replace(/\{\{retryWithdrawalUrl\}\}/g, escapeHtml("https://shop.gameket.io/user/wallet"))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderUserSuspendedEmail = (user: User, suspendedOn: string): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "user-suspended-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+  const caseId = `SUSP-${randomBytes(4).toString("hex").toUpperCase()}`;
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{email\}\}/g, escapeHtml(user.email))
+    .replace(/\{\{userId\}\}/g, escapeHtml(user.id))
+    .replace(/\{\{suspendedOn\}\}/g, escapeHtml(formatDateTime(suspendedOn)))
+    .replace(/\{\{suspensionType\}\}/g, "Administrative Suspension")
+    .replace(/\{\{caseId\}\}/g, escapeHtml(caseId))
+    .replace(/\{\{suspensionReason\}\}/g, "Your account was suspended due to a policy or security review. Contact support to submit an appeal.")
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
 function getRankFromSales(totalSales: number): number {
   if (totalSales >= 10000) return 10;
   if (totalSales >= 9000) return 9;
@@ -1631,6 +1702,20 @@ export const adminMutations = {
 
     const updatedUser = await users.findOne({ id: userId });
 
+    if (updatedUser) {
+      try {
+        const html = renderUserSuspendedEmail(updatedUser, new Date().toISOString());
+        await smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: updatedUser.email,
+          subject: "Account Suspended - Action Required",
+          html,
+        });
+      } catch (error) {
+        console.error("Failed to send user suspension email:", error);
+      }
+    }
+
     return {
       code: 200,
       success: true,
@@ -2295,6 +2380,24 @@ export const adminMutations = {
     );
 
     const updated = await withdrawals.findOne({ withdrawalId });
+    const db = getDB();
+
+    if (updated) {
+      const user = await db.collection<User>("users").findOne({ id: updated.userId });
+      if (user) {
+        try {
+          const html = renderWithdrawalStatusUpdateEmail(user, updated, "approved");
+          await smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: user.email,
+            subject: "Withdrawal Status Update",
+            html,
+          });
+        } catch (error) {
+          console.error("Failed to send withdrawal approval email:", error);
+        }
+      }
+    }
 
     return {
       code: 200,
@@ -2359,6 +2462,24 @@ export const adminMutations = {
     );
 
     const updated = await withdrawals.findOne({ withdrawalId });
+    const db = getDB();
+
+    if (updated) {
+      const user = await db.collection<User>("users").findOne({ id: updated.userId });
+      if (user) {
+        try {
+          const html = renderWithdrawalStatusUpdateEmail(user, updated, "declined");
+          await smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: user.email,
+            subject: "Withdrawal Status Update",
+            html,
+          });
+        } catch (error) {
+          console.error("Failed to send withdrawal decline email:", error);
+        }
+      }
+    }
 
     return {
       code: 200,

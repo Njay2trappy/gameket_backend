@@ -3,6 +3,9 @@ import { randomBytes } from "crypto";
 import { getDB, getWalletsDB, getCatalogsDB } from "../db.js";
 import type { Deposit, Transaction, Balance, Order, Product, Store, User } from "../types.js";
 import bcrypt from "bcryptjs";
+import nodemailer from "nodemailer";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 function getRankFromSales(totalSales: number): number {
   if (totalSales >= 10000) return 10;
@@ -18,6 +21,56 @@ function getRankFromSales(totalSales: number): number {
 }
 
 const router = Router();
+
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
+
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const formatUsd = (amount: number): string => {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+};
+
+const renderDepositConfirmedEmail = (
+  user: User,
+  deposit: Deposit,
+  walletBalance: number,
+  confirmedOnIso: string,
+  network: string | undefined
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "deposit-confirmed-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+  const confirmedOn = new Date(confirmedOnIso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{depositAmount\}\}/g, escapeHtml(formatUsd(deposit.amount)))
+    .replace(/\{\{transactionId\}\}/g, escapeHtml(deposit.transactionId || deposit.payId))
+    .replace(/\{\{confirmedOn\}\}/g, escapeHtml(confirmedOn))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(network || deposit.paymentMethod || "N/A"))
+    .replace(/\{\{walletBalance\}\}/g, escapeHtml(formatUsd(walletBalance)))
+    .replace(/\{\{walletUrl\}\}/g, escapeHtml("https://shop.gameket.io/user/wallet"))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
 
 router.post("/webhook/deposit", async (req, res) => {
   const { txnid, status, amount, network, createdAt, privateKey } = req.body;
@@ -63,9 +116,10 @@ router.post("/webhook/deposit", async (req, res) => {
   if (deposit.type === "deposit") {
     // --- Regular deposit flow ---
     if (status === "completed") {
-      await walletsDB.collection<Balance>("Balances").updateOne(
+      const updatedBalance = await walletsDB.collection<Balance>("Balances").findOneAndUpdate(
         { userId: deposit.userId },
-        { $inc: { availableBalance: deposit.amount } }
+        { $inc: { availableBalance: deposit.amount } },
+        { returnDocument: "after" }
       );
 
       await walletsDB.collection<Deposit>("Deposits").updateOne(
@@ -77,6 +131,28 @@ router.post("/webhook/deposit", async (req, res) => {
         { id: deposit.transactionId },
         { $set: { status: "completed" } }
       );
+
+      const user = await db.collection<User>("users").findOne({ id: deposit.userId });
+      if (user) {
+        try {
+          const html = renderDepositConfirmedEmail(
+            user,
+            deposit,
+            updatedBalance?.availableBalance ?? deposit.amount,
+            createdAt || new Date().toISOString(),
+            network
+          );
+
+          await smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: user.email,
+            subject: "Deposit Confirmed - Wallet Credited",
+            html,
+          });
+        } catch (error) {
+          console.error("Failed to send deposit confirmation email:", error);
+        }
+      }
 
       res.status(200).json({ success: true, message: "Deposit completed" });
     } else {
