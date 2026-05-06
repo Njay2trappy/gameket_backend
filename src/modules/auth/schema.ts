@@ -74,10 +74,6 @@ export const authTypeDefs = `#graphql
     code: String!
   }
 
-  input SendVerificationInput {
-    email: String!
-  }
-
   type SendVerificationResponse {
     code: Int!
     success: Boolean!
@@ -86,7 +82,7 @@ export const authTypeDefs = `#graphql
 
   input CompleteVerificationInput {
     email: String!
-    otp: String!
+    token: String!
   }
 
   type CompleteVerificationResponse {
@@ -111,7 +107,7 @@ export const authTypeDefs = `#graphql
     verifyTwoFactorSetup(input: VerifyTwoFactorSetupInput!): UpdateTwoFactorAuthResponse!
     disableTwoFactorAuth(input: DisableTwoFactorAuthInput!): UpdateTwoFactorAuthResponse!
     updateTwoFactorAuth: UpdateTwoFactorAuthResponse!
-    sendVerification(input: SendVerificationInput!): SendVerificationResponse!
+    sendVerification: SendVerificationResponse!
     completeVerification(input: CompleteVerificationInput!): CompleteVerificationResponse!
   }
 

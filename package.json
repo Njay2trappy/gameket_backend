@@ -4,7 +4,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/src/emails && cp src/emails/*.html dist/src/emails/",
     "start": "node dist/src/index.js"
   },
   "keywords": [],

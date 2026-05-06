@@ -3,6 +3,9 @@ import jwt from "jsonwebtoken";
 import { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
+import nodemailer from "nodemailer";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import type { User, Store, Premium, Transaction, Product, Order, Account, VerificationRequest, Support, Balance, Dispute, DisputeMessage, Withdrawal } from "../../types.js";
 import type { Context } from "../../index.js";
@@ -11,6 +14,32 @@ import { catalogsMutations, catalogsQueries } from "../catalogs/resolvers.js";
 const MAX_ADMIN_ATTEMPTS = 5;
 const ADMIN_LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
 const adminLoginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
+
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const renderWelcomeEmail = (user: User): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "welcome-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
 
 function getRankFromSales(totalSales: number): number {
   if (totalSales >= 10000) return 10;
@@ -1377,6 +1406,50 @@ export const adminQueries = {
 };
 
 export const adminMutations = {
+  Testemail: async (
+    _: unknown,
+    { userId, emailkey, mailId }: { userId: string; emailkey: string; mailId: number },
+    _context: Context
+  ) => {
+    const configuredEmailKey = process.env.EMAIL_KEY;
+    if (!configuredEmailKey) {
+      return { code: 500, success: false, message: "EMAIL_KEY is not configured" };
+    }
+
+    if (emailkey !== configuredEmailKey) {
+      return { code: 403, success: false, message: "Invalid email key" };
+    }
+
+    if (mailId !== 1) {
+      return { code: 400, success: false, message: "Unsupported mailId. Use 1 for welcome-email.html" };
+    }
+
+    const db = getDB();
+    const user = await db.collection<User>("users").findOne({ id: userId });
+
+    if (!user) {
+      return { code: 404, success: false, message: "User not found" };
+    }
+
+    try {
+      await smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Welcome to Gameket",
+        html: renderWelcomeEmail(user),
+      });
+    } catch (emailError) {
+      console.error("Failed to send test email:", emailError);
+      return { code: 500, success: false, message: "Failed to send test email" };
+    }
+
+    return {
+      code: 200,
+      success: true,
+      message: `Test email sent successfully using mailId ${mailId}`,
+    };
+  },
+
   adminLogin: async (
     _: unknown,
     { input }: { input: { email: string; password: string } }

@@ -173,6 +173,12 @@ export const adminTypeDefs = `#graphql
     support: SupportAccountDetails
   }
 
+  type AdminTestEmailResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+  }
+
   type AdminCreateOfficialStoreResponse {
     code: Int!
     success: Boolean!
@@ -382,5 +388,6 @@ export const adminTypeDefs = `#graphql
     AdminRefundBuyer(disputeId: ID!): AdminDisputeActionResponse!
     AdminApproveWithdrawal(withdrawalId: ID!): AdminWithdrawalActionResponse!
     AdminDeclineWithdrawal(withdrawalId: ID!): AdminWithdrawalActionResponse!
+    Testemail(userId: ID!, emailkey: String!, mailId: Int!): AdminTestEmailResponse!
   }
 `;

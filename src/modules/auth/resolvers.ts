@@ -6,12 +6,25 @@ import { generateSecret, generateURI, verifySync } from "otplib";
 import QRCode from "qrcode";
 import { OAuth2Client } from "google-auth-library";
 import { GraphQLError } from "graphql";
+import nodemailer from "nodemailer";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import type { User, Account, Balance, Store } from "../../types.js";
 import type { Context } from "../../index.js";
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const TWO_FACTOR_ISSUER = (process.env.TWO_FACTOR_ISSUER || "Gameket").trim();
+
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
 
 type TwoFactorChallengePayload = {
   purpose: "2fa_login";
@@ -107,6 +120,35 @@ const issueLoginToken = (user: User, tokenVersion: number): string => {
     getJwtSecret(),
     { expiresIn: "1h" }
   );
+};
+
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const renderVerificationEmail = (user: User, verificationToken: string): string => {
+  const confirmEmailBaseUrl = (process.env.CONFIRM_EMAIL_URL || "https://shop.gameket.io/auth/confirm-email").trim();
+  const confirmEmailUrl = `${confirmEmailBaseUrl}?token=${encodeURIComponent(verificationToken)}&email=${encodeURIComponent(user.email)}`;
+  const template = readFileSync(join(process.cwd(), "src", "emails", "confirm-email.html"), "utf-8");
+
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{confirmEmailUrl\}\}/g, escapeHtml(confirmEmailUrl))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderWelcomeEmail = (user: User): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "welcome-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
 const loginFailureResponse = (code: number, message: string) => ({
@@ -224,8 +266,8 @@ export const authMutations = {
       twoFactorEnabledAt: null,
       lastLogin: null,
       tokenVersion: 0,
-      otp: null,
-      otpExpiresAt: null,
+      verificationToken: null,
+      verificationTokenExpiresAt: null,
     };
 
     await users.insertOne(user);
@@ -267,16 +309,51 @@ export const authMutations = {
 
     await stores.insertOne(store);
 
-    // Generate OTP for email verification
-    const otp = String(randomInt(100000, 999999));
-    const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    // Generate verification token valid for 15 minutes
+    const verificationToken = randomBytes(24).toString("hex");
+    const verificationTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
     await accounts.updateOne(
       { userId },
-      { $set: { otp, otpExpiresAt } }
+      { $set: { verificationToken, verificationTokenExpiresAt } }
     );
 
-    return { code: 201, success: true, message: "Registration successful. A verification code has been sent to your email.", user: { ...user, twoFactorAuth: false } };
+    const emailSendResults = await Promise.allSettled([
+      smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Welcome to Gameket",
+        html: renderWelcomeEmail(user),
+      }),
+      smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Verify your Gameket account",
+        html: renderVerificationEmail(user, verificationToken),
+      }),
+    ]);
+
+    const [welcomeResult, confirmResult] = emailSendResults;
+    const welcomeSent = welcomeResult.status === "fulfilled";
+    const confirmSent = confirmResult.status === "fulfilled";
+
+    if (!welcomeSent) {
+      console.error("Failed to send welcome email during registration:", welcomeResult.reason);
+    }
+    if (!confirmSent) {
+      console.error("Failed to send verification email during registration:", confirmResult.reason);
+    }
+
+    let message = "Registration successful. Welcome and verification emails have been sent.";
+    if (!welcomeSent && !confirmSent) {
+      message = "Registration successful, but we could not send your welcome and verification emails right now.";
+    } else if (!welcomeSent) {
+      message = "Registration successful. Verification email sent, but welcome email could not be sent right now.";
+    } else if (!confirmSent) {
+      message = "Registration successful. Welcome email sent, but verification email could not be sent right now.";
+    }
+
+    return { code: 201, success: true, message, user: { ...user, twoFactorAuth: false } };
   },
 
   login: async (
@@ -486,8 +563,8 @@ export const authMutations = {
       twoFactorEnabledAt: null,
       lastLogin: registered,
       tokenVersion: 1,
-      otp: null,
-      otpExpiresAt: null,
+      verificationToken: null,
+      verificationTokenExpiresAt: null,
     };
 
     await users.insertOne(user);
@@ -883,48 +960,83 @@ export const authMutations = {
 
   sendVerification: async (
     _: unknown,
-    { input }: { input: { email: string } }
+    __: unknown,
+    context: Context
   ) => {
-    const email = input.email.trim().toLowerCase();
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
 
     const db = getDB();
     const accounts = db.collection<Account>("accounts");
     const users = db.collection<User>("users");
 
-    const account = await accounts.findOne({ email });
+    const account = await accounts.findOne({ userId });
     if (!account) {
-      // Return generic success to prevent email enumeration
-      return { code: 200, success: true, message: "If the email exists, a verification code has been sent" };
+      return { code: 404, success: false, message: "Account not found" };
     }
 
     const user = await users.findOne({ id: account.userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found" };
+    }
+
     if (user?.isVerified) {
       return { code: 400, success: false, message: "Account is already verified" };
     }
 
-    // Check if an active OTP already exists
-    if (account.otp && account.otpExpiresAt && new Date(account.otpExpiresAt) > new Date()) {
-      return { code: 429, success: false, message: "A verification code has already been sent. Please wait until it expires before requesting a new one" };
-    }
-
-    // Generate 6-digit OTP
-    const otp = String(randomInt(100000, 999999));
-    const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
-    await accounts.updateOne(
-      { email },
-      { $set: { otp, otpExpiresAt } }
+    const hasActiveToken = Boolean(
+      account.verificationToken &&
+      account.verificationTokenExpiresAt &&
+      new Date(account.verificationTokenExpiresAt) > new Date()
     );
 
-    return { code: 200, success: true, message: "If the email exists, a verification code has been sent" };
+    const verificationToken = hasActiveToken
+      ? account.verificationToken!
+      : randomBytes(24).toString("hex");
+    const verificationTokenExpiresAt = hasActiveToken
+      ? account.verificationTokenExpiresAt!
+      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    if (!hasActiveToken) {
+      await accounts.updateOne(
+        { userId },
+        { $set: { verificationToken, verificationTokenExpiresAt } }
+      );
+    }
+
+    try {
+      await smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Verify your Gameket account",
+        html: renderVerificationEmail(user, verificationToken),
+      });
+    } catch (emailError) {
+      if (!hasActiveToken) {
+        await accounts.updateOne(
+          { userId },
+          { $set: { verificationToken: null, verificationTokenExpiresAt: null } }
+        );
+      }
+
+      console.error("Failed to send verification email:", emailError);
+      return { code: 500, success: false, message: "Failed to send verification email" };
+    }
+
+    return { code: 200, success: true, message: "Verification email sent successfully" };
   },
 
   completeVerification: async (
     _: unknown,
-    { input }: { input: { email: string; otp: string } }
+    { input }: { input: { email: string; token: string } }
   ) => {
     const email = input.email.trim().toLowerCase();
-    const otp = input.otp.trim();
+    const token = input.token.trim();
 
     const db = getDB();
     const accounts = db.collection<Account>("accounts");
@@ -935,27 +1047,27 @@ export const authMutations = {
       return { code: 400, success: false, message: "Invalid verification details" };
     }
 
-    if (!account.otp || !account.otpExpiresAt) {
-      return { code: 400, success: false, message: "No verification code was requested" };
+    if (!account.verificationToken || !account.verificationTokenExpiresAt) {
+      return { code: 400, success: false, message: "No verification token was requested" };
     }
 
-    if (new Date() > new Date(account.otpExpiresAt)) {
-      // Clear expired OTP
+    if (new Date() > new Date(account.verificationTokenExpiresAt)) {
+      // Clear expired token
       await accounts.updateOne(
         { email },
-        { $set: { otp: null, otpExpiresAt: null } }
+        { $set: { verificationToken: null, verificationTokenExpiresAt: null } }
       );
-      return { code: 400, success: false, message: "Verification code has expired" };
+      return { code: 400, success: false, message: "Verification token has expired" };
     }
 
-    if (account.otp !== otp) {
-      return { code: 400, success: false, message: "Invalid verification code" };
+    if (account.verificationToken !== token) {
+      return { code: 400, success: false, message: "Invalid verification token" };
     }
 
-    // Clear OTP and mark user as verified
+    // Clear token and mark user as verified
     await accounts.updateOne(
       { email },
-      { $set: { otp: null, otpExpiresAt: null } }
+      { $set: { verificationToken: null, verificationTokenExpiresAt: null } }
     );
 
     await users.updateOne(

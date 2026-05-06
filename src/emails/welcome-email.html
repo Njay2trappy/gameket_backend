@@ -1,0 +1,581 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Welcome to Gameket | Gameket</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@100..800&display=swap" rel="stylesheet" />
+    <style type="text/css">
+      body,
+      p,
+      div,
+      a,
+      td {
+        margin: 0;
+        padding: 0;
+        font-family: "Sora", Arial, sans-serif;
+      }
+
+      body {
+        color: #121212;
+        background-color: #ffffff;
+      }
+
+      table {
+        border-collapse: collapse;
+        border-spacing: 0;
+      }
+
+      img {
+        border: 0;
+        outline: none;
+        text-decoration: none;
+        -ms-interpolation-mode: bicubic;
+      }
+
+      table.wrapper {
+        width: 100% !important;
+        table-layout: fixed;
+        -webkit-font-smoothing: antialiased;
+        -webkit-text-size-adjust: 100%;
+        -moz-text-size-adjust: 100%;
+        -ms-text-size-adjust: 100%;
+      }
+
+      .preheader {
+        display: none !important;
+        visibility: hidden;
+        font-size: 1px;
+        color: #f6f6f6;
+        line-height: 1px;
+        max-height: 0;
+        max-width: 0;
+        opacity: 0;
+        overflow: hidden;
+      }
+
+      .card {
+        background: #ffffff;
+        border: 0;
+        border-radius: 0;
+        overflow: hidden;
+      }
+
+      .email-header {
+        background: #121212;
+        padding: 28px 20px 20px 20px;
+      }
+
+      .header-kicker {
+        color: #d0d5dd;
+        font-size: 12px;
+        line-height: 18px;
+        margin-top: 8px;
+        letter-spacing: 0.2px;
+      }
+
+      .email-content {
+        padding: 22px 20px 18px 20px;
+      }
+
+      .email-footer {
+        padding: 0 0 20px 0;
+      }
+
+      .section-card {
+        width: 100%;
+        background: #ffffff;
+        border: 1px solid #eaecf0;
+        border-radius: 0;
+      }
+
+      .section-card-pad {
+        padding: 16px;
+      }
+
+      .section-gap {
+        height: 16px;
+        line-height: 16px;
+        font-size: 0;
+      }
+
+      .eyebrow {
+        color: #dd9f39;
+        font-size: 12px;
+        line-height: 18px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.35px;
+      }
+
+      .title {
+        color: #121212;
+        font-size: 30px;
+        line-height: 38px;
+        font-weight: 700;
+        margin-top: 8px;
+      }
+
+      .lead {
+        color: #667085;
+        font-size: 15px;
+        line-height: 24px;
+        margin-top: 8px;
+      }
+
+      .a-button-2 {
+        background-color: #121212;
+        color: #ffffff !important;
+        border: 2px solid #121212;
+        border-radius: 0;
+        font-size: 15px;
+        line-height: 18px;
+        font-weight: 600;
+        text-decoration: none;
+        display: inline-block;
+        padding: 12px 26px;
+      }
+
+      .edge-title {
+        color: #121212;
+        font-size: 16px;
+        line-height: 22px;
+        font-weight: 700;
+      }
+
+      .howworks-title {
+        color: #121212;
+        font-size: 16px;
+        line-height: 22px;
+        font-weight: 700;
+      }
+
+      .howworks-card {
+        background: #ffffff;
+        border: 1px solid #eaecf0;
+        border-radius: 0;
+        padding: 8px;
+      }
+
+      .howworks-step {
+        display: inline-block;
+        background: #121212;
+        color: #ffffff;
+        font-size: 10px;
+        line-height: 14px;
+        font-weight: 700;
+        border-radius: 0;
+        padding: 3px 8px;
+        margin-bottom: 6px;
+      }
+
+      .howworks-image {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        height: auto;
+        border-radius: 0;
+        margin: 0 auto;
+      }
+
+      .howworks-copy {
+        color: #667085;
+        font-size: 11px;
+        line-height: 16px;
+        margin-top: 6px;
+      }
+
+      .flow-section {
+        margin-top: 12px;
+      }
+
+      .flow-grid {
+        margin-top: 8px;
+      }
+
+      .flow-divider {
+        border-top: 1px solid rgba(32, 32, 54, 0.1);
+        font-size: 0;
+        line-height: 0;
+      }
+
+      .edge-card {
+        background: #ffffff;
+        border: 1px solid #eaecf0;
+        border-radius: 0;
+        padding: 10px;
+      }
+
+      .edge-image {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        height: auto;
+        border-radius: 0;
+      }
+
+      .edge-headline {
+        color: #121212;
+        font-size: 12px;
+        line-height: 18px;
+        font-weight: 700;
+        margin-top: 8px;
+      }
+
+      .edge-copy {
+        color: #667085;
+        font-size: 11px;
+        line-height: 16px;
+        margin-top: 4px;
+      }
+
+      .hr {
+        border-top: 1px solid rgba(32, 32, 54, 0.1);
+        font-size: 0;
+        line-height: 0;
+      }
+
+      .site-footer-about {
+        color: #667085;
+        font-size: 12px;
+        line-height: 18px;
+        text-align: left;
+      }
+
+      .site-footer-logo {
+        padding-bottom: 8px;
+        text-align: center;
+      }
+
+      .site-footer-logo img {
+        display: block;
+        width: 120px;
+        max-width: 100%;
+      }
+
+      .site-footer-links {
+        padding-bottom: 6px;
+        text-align: center;
+      }
+
+      .site-footer-link {
+        color: #121212 !important;
+        font-size: 12px;
+        line-height: 18px;
+        font-weight: 500;
+        text-decoration: none;
+        margin: 0 8px 6px 8px;
+        display: inline-block;
+        white-space: nowrap;
+      }
+
+      .site-footer-copy {
+        color: #6b7280;
+        font-size: 11px;
+        line-height: 16px;
+        text-align: center;
+      }
+
+      @media screen and (max-width: 768px) {
+        .mobile-shell {
+          width: 100% !important;
+        }
+
+        .mobile-pad {
+          padding-left: 20px !important;
+          padding-right: 20px !important;
+        }
+
+        .email-content {
+          padding: 18px 14px 14px 14px !important;
+        }
+
+        .email-footer {
+          padding: 0 0 14px 0 !important;
+        }
+
+        .section-card-pad {
+          padding: 12px !important;
+        }
+
+        .section-gap {
+          height: 12px !important;
+          line-height: 12px !important;
+        }
+
+        .title {
+          font-size: 25px !important;
+          line-height: 32px !important;
+        }
+
+        .stack-column {
+          display: block !important;
+          width: 100% !important;
+          padding-right: 0 !important;
+          padding-left: 0 !important;
+          padding-bottom: 10px !important;
+        }
+
+        .flow-grid {
+          width: 100% !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="preheader">Welcome to Gameket. Your account is ready to explore the marketplace.</div>
+    <center class="wrapper">
+      <table class="wrapper" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="#ffffff">
+        <tr>
+          <td align="center" style="padding: 0;">
+            <table class="mobile-shell" width="620" cellpadding="0" cellspacing="0" border="0" style="width: 100%; max-width: 620px;">
+              <tr>
+                <td class="card" align="center">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td class="email-header" align="center">
+                        <img
+                          src="https://shop.gameket.io/images/logo-main.png"
+                          alt="Gameket"
+                          width="220"
+                          style="display: block; width: 220px; max-width: 100%;"
+                        />
+                        <p class="header-kicker">Fast delivery. Trusted sellers. Seamless checkout.</p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="email-content" align="left">
+                        <!-- Intro Section Card -->
+                        <table class="section-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-card-pad" align="left">
+                              <p class="eyebrow">Hello {{firstName}},</p>
+                              <p class="title">Welcome to Gameket</p>
+                              <p class="lead">You now have <strong>instant access</strong> to a global catalog of game vouchers, gift cards, prepaid products, and direct top-ups - all sourced from trusted sellers and delivered through a secure, transparent checkout experience built for speed.</p>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-gap">&nbsp;</td>
+                          </tr>
+                        </table>
+
+                        <!-- How It Works Section Card -->
+                        <table class="section-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-card-pad" align="left">
+                              <p class="howworks-title">How It Works</p>
+
+                              <table class="flow-grid" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top: 10px;">
+                                <tr>
+                                  <td class="stack-column" width="50%" valign="top" style="padding-right: 6px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="howworks-card">
+                                          <span class="howworks-step">Step 1</span>
+                                          <img
+                                            class="howworks-image"
+                                            src="https://shop.gameket.io/images/loyalty.jpg"
+                                            alt="Sellers list digital products"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="howworks-copy">Sellers list products such as gift cards, game vouchers, and other digital items.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                  <td class="stack-column" width="50%" valign="top" style="padding-left: 6px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="howworks-card">
+                                          <span class="howworks-step">Step 2</span>
+                                          <img
+                                            class="howworks-image"
+                                            src="https://shop.gameket.io/images/woman-buying-food.jpg"
+                                            alt="Buyers select an offer and checkout"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="howworks-copy">Buyers choose their preferred offer and complete checkout.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td class="stack-column" width="50%" valign="top" style="padding-right: 6px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="howworks-card">
+                                          <span class="howworks-step">Step 3</span>
+                                          <img
+                                            class="howworks-image"
+                                            src="https://shop.gameket.io/images/safe-wallets.jpg"
+                                            alt="Validation window and dispute support"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="howworks-copy">After payment is confirmed, buyers can validate delivery and raise a dispute if needed.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                  <td class="stack-column" width="50%" valign="top" style="padding-left: 6px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="howworks-card">
+                                          <span class="howworks-step">Step 4</span>
+                                          <img
+                                            class="howworks-image"
+                                            src="https://shop.gameket.io/images/happy-man.jpg"
+                                            alt="Order settled and payout released"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="howworks-copy">Valid orders are settled and seller payouts are released according to platform rules.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0" align="center" role="presentation" style="margin-top: 14px;">
+                          <tr>
+                            <td align="center">
+                              <a class="a-button-2" href="https://shop.gameket.io" target="_blank" rel="noopener noreferrer">
+                                Start Shopping
+                              </a>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-gap">&nbsp;</td>
+                          </tr>
+                        </table>
+
+                        <!-- The GameKet Edge Section Card -->
+                        <table class="section-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-card-pad" align="left">
+                              <p class="edge-title">The GameKet Edge</p>
+                              <p class="lead" style="margin-top: 6px; font-size: 13px; line-height: 20px;">
+                                What makes Gameket better for buyers and sellers.
+                              </p>
+
+                              <table class="flow-grid" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top: 10px;">
+                                <tr>
+                                  <td class="stack-column" width="33.33%" valign="top" style="padding-right: 8px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="edge-card">
+                                          <img
+                                            class="edge-image"
+                                            src="https://i.ibb.co/YTcrwPt5/screen.png"
+                                            alt="Protected checkout infographic"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="edge-headline">Protected Checkout</p>
+                                          <p class="edge-copy">Buyer-first protection with secure payments and clear dispute handling.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                  <td class="stack-column" width="33.33%" valign="top" style="padding-left: 4px; padding-right: 4px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="edge-card">
+                                          <img
+                                            class="edge-image"
+                                            src="https://i.ibb.co/yBG9yxbF/screen.png"
+                                            alt="Trusted sellers infographic"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="edge-headline">Trusted Sellers</p>
+                                          <p class="edge-copy">Curated storefronts and transparent transactions for confident purchases.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                  <td class="stack-column" width="33.33%" valign="top" style="padding-left: 8px; padding-bottom: 10px;">
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                                      <tr>
+                                        <td class="edge-card">
+                                          <img
+                                            class="edge-image"
+                                            src="https://i.ibb.co/zWWbYjss/screen.png"
+                                            alt="Fast fulfillment infographic"
+                                            style="display: block; width: 100%; max-width: 100%; height: auto;"
+                                          />
+                                          <p class="edge-headline">Fast Fulfillment</p>
+                                          <p class="edge-copy">Smooth checkout and quick delivery for digital products that matter now.</p>
+                                        </td>
+                                      </tr>
+                                    </table>
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+
+                        <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-gap">&nbsp;</td>
+                          </tr>
+                        </table>
+
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="email-footer" align="left">
+
+                        <!-- Footer Section Card -->
+                        <table class="section-card" width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                          <tr>
+                            <td class="section-card-pad" align="left">
+                              <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="text-align: left;">
+                                <tr>
+                                  <td class="site-footer-logo">
+                                    <img
+                                      src="https://i.ibb.co/Lzq9S8ws/Group-17.png"
+                                      alt="Gameket"
+                                      width="120"
+                                      style="display: inline-block; width: 120px; max-width: 100%;"
+                                    />
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td class="mobile-pad site-footer-links">
+                                    <a class="site-footer-link" href="https://shop.gameket.io/about" target="_blank" rel="noopener noreferrer">About Us</a>
+                                    <a class="site-footer-link" href="https://shop.gameket.io/contact-support" target="_blank" rel="noopener noreferrer">Contact Us</a>
+                                    <a class="site-footer-link" href="https://shop.gameket.io/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+                                    <a class="site-footer-link" href="https://shop.gameket.io/terms" target="_blank" rel="noopener noreferrer">Terms and Condition</a>
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td class="site-footer-copy" style="padding-top: 8px;">
+                                    &copy; {{year}} shop.gameket.io All Rights Reserved
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </center>
+  </body>
+</html>

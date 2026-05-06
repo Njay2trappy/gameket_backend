@@ -24,8 +24,8 @@ export interface Account {
   twoFactorEnabledAt?: string | null;
   lastLogin: string | null;
   tokenVersion: number;
-  otp: string | null;
-  otpExpiresAt: string | null;
+  verificationToken: string | null;
+  verificationTokenExpiresAt: string | null;
 }
 
 export interface Support {
