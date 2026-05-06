@@ -26,6 +26,8 @@ export interface Account {
   tokenVersion: number;
   verificationToken: string | null;
   verificationTokenExpiresAt: string | null;
+  passwordResetOtp: string | null;
+  passwordResetOtpExpiresAt: string | null;
 }
 
 export interface Support {

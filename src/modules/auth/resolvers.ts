@@ -151,6 +151,17 @@ const renderWelcomeEmail = (user: User): string => {
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const renderPasswordResetOtpEmail = (user: User, otpCode: string): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "request-otp-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{otpCode\}\}/g, escapeHtml(otpCode))
+    .replace(/\{\{otpExpiryMinutes\}\}/g, "15")
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
 const loginFailureResponse = (code: number, message: string) => ({
   code,
   success: false,
@@ -268,6 +279,8 @@ export const authMutations = {
       tokenVersion: 0,
       verificationToken: null,
       verificationTokenExpiresAt: null,
+      passwordResetOtp: null,
+      passwordResetOtpExpiresAt: null,
     };
 
     await users.insertOne(user);
@@ -565,6 +578,8 @@ export const authMutations = {
       tokenVersion: 1,
       verificationToken: null,
       verificationTokenExpiresAt: null,
+      passwordResetOtp: null,
+      passwordResetOtpExpiresAt: null,
     };
 
     await users.insertOne(user);
@@ -1076,5 +1091,162 @@ export const authMutations = {
     );
 
     return { code: 200, success: true, message: "Account verified successfully" };
+  },
+
+  forgotPassword: async (
+    _: unknown,
+    { input }: { input: { email: string } }
+  ) => {
+    const email = input.email.trim().toLowerCase();
+
+    if (email.length > 254) {
+      return { code: 400, success: false, message: "Email is too long" };
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return { code: 400, success: false, message: "Invalid email format" };
+    }
+
+    const db = getDB();
+    const accounts = db.collection<Account>("accounts");
+    const users = db.collection<User>("users");
+
+    const account = await accounts.findOne({ email });
+    if (!account) {
+      // Generic response prevents account enumeration
+      return { code: 200, success: true, message: "If the email exists, an OTP has been sent" };
+    }
+
+    if (account.authProvider === "google") {
+      return { code: 400, success: false, message: "This account uses Google sign-in. Please sign in with Google." };
+    }
+
+    const user = await users.findOne({ id: account.userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found" };
+    }
+
+    const hasActiveOtp = Boolean(
+      account.passwordResetOtp &&
+      account.passwordResetOtpExpiresAt &&
+      new Date(account.passwordResetOtpExpiresAt) > new Date()
+    );
+
+    const otp = hasActiveOtp
+      ? account.passwordResetOtp!
+      : String(randomInt(100000, 1000000));
+    const otpExpiresAt = hasActiveOtp
+      ? account.passwordResetOtpExpiresAt!
+      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    if (!hasActiveOtp) {
+      await accounts.updateOne(
+        { email },
+        { $set: { passwordResetOtp: otp, passwordResetOtpExpiresAt: otpExpiresAt } }
+      );
+    }
+
+    try {
+      await smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: user.email,
+        subject: "Your password reset OTP",
+        html: renderPasswordResetOtpEmail(user, otp),
+      });
+    } catch (emailError) {
+      if (!hasActiveOtp) {
+        await accounts.updateOne(
+          { email },
+          { $set: { passwordResetOtp: null, passwordResetOtpExpiresAt: null } }
+        );
+      }
+
+      console.error("Failed to send password reset OTP email:", emailError);
+      return { code: 500, success: false, message: "Failed to send password reset OTP email" };
+    }
+
+    return { code: 200, success: true, message: "If the email exists, an OTP has been sent" };
+  },
+
+  resetPassword: async (
+    _: unknown,
+    { input }: { input: { email: string; password: string; otp: string } }
+  ) => {
+    const email = input.email.trim().toLowerCase();
+    const password = input.password;
+    const otp = input.otp.trim();
+
+    if (email.length > 254) {
+      return { code: 400, success: false, message: "Email is too long" };
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return { code: 400, success: false, message: "Invalid email format" };
+    }
+
+    if (!/^\d{6}$/.test(otp)) {
+      return { code: 400, success: false, message: "OTP must be a 6-digit code" };
+    }
+
+    if (password.length < 8) {
+      return { code: 400, success: false, message: "Password must be at least 8 characters" };
+    }
+    if (password.length > 128) {
+      return { code: 400, success: false, message: "Password must be at most 128 characters" };
+    }
+    if (!/[A-Z]/.test(password)) {
+      return { code: 400, success: false, message: "Password must contain at least one uppercase letter" };
+    }
+    if (!/[a-z]/.test(password)) {
+      return { code: 400, success: false, message: "Password must contain at least one lowercase letter" };
+    }
+    if (!/[0-9]/.test(password)) {
+      return { code: 400, success: false, message: "Password must contain at least one number" };
+    }
+
+    const db = getDB();
+    const accounts = db.collection<Account>("accounts");
+
+    const account = await accounts.findOne({ email });
+    if (!account) {
+      return { code: 400, success: false, message: "Invalid reset details" };
+    }
+
+    if (account.authProvider === "google") {
+      return { code: 400, success: false, message: "This account uses Google sign-in. Please sign in with Google." };
+    }
+
+    if (!account.passwordResetOtp || !account.passwordResetOtpExpiresAt) {
+      return { code: 400, success: false, message: "No password reset OTP was requested" };
+    }
+
+    if (new Date() > new Date(account.passwordResetOtpExpiresAt)) {
+      await accounts.updateOne(
+        { email },
+        { $set: { passwordResetOtp: null, passwordResetOtpExpiresAt: null } }
+      );
+      return { code: 400, success: false, message: "Password reset OTP has expired" };
+    }
+
+    if (account.passwordResetOtp !== otp) {
+      return { code: 400, success: false, message: "Invalid password reset OTP" };
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const newTokenVersion = (account.tokenVersion ?? 0) + 1;
+
+    await accounts.updateOne(
+      { email },
+      {
+        $set: {
+          password: hashedPassword,
+          tokenVersion: newTokenVersion,
+          passwordResetOtp: null,
+          passwordResetOtpExpiresAt: null,
+        },
+      }
+    );
+
+    return { code: 200, success: true, message: "Password reset successful. Please login with your new password." };
   },
 };

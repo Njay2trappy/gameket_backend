@@ -91,6 +91,28 @@ export const authTypeDefs = `#graphql
     message: String!
   }
 
+  input ForgotPasswordInput {
+    email: String!
+  }
+
+  type ForgotPasswordResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+  }
+
+  input ResetPasswordInput {
+    email: String!
+    password: String!
+    otp: String!
+  }
+
+  type ResetPasswordResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+  }
+
   input GoogleSignInInput {
     idToken: String!
     username: String
@@ -109,6 +131,8 @@ export const authTypeDefs = `#graphql
     updateTwoFactorAuth: UpdateTwoFactorAuthResponse!
     sendVerification: SendVerificationResponse!
     completeVerification(input: CompleteVerificationInput!): CompleteVerificationResponse!
+    forgotPassword(input: ForgotPasswordInput!): ForgotPasswordResponse!
+    resetPassword(input: ResetPasswordInput!): ResetPasswordResponse!
   }
 
   # extend type Query {
