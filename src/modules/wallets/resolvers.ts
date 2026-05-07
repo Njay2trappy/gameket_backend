@@ -1,9 +1,10 @@
-import crypto, { randomBytes } from "crypto";
+import { randomBytes } from "crypto";
 import { GraphQLError } from "graphql";
 import nodemailer from "nodemailer";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
+import { decryptCodeOrPlain } from "../../utils/codeCrypto.js";
 import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal, NotificationState, NotificationConflictRead } from "../../types.js";
 import type { Context } from "../../index.js";
 
@@ -71,44 +72,6 @@ function getRankFromSales(totalSales: number): number {
   if (totalSales >= 500) return 3;
   if (totalSales >= 100) return 2;
   return 1;
-}
-
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
-const ALGORITHM = "aes-256-gcm";
-
-function decrypt(encryptedText: string): string {
-  // Some manual-order codes are stored as plain text; only decrypt valid encrypted payloads.
-  const parts = encryptedText.split(":");
-  if (parts.length !== 3) {
-    return encryptedText;
-  }
-
-  const [ivHex, authTagHex, ciphertext] = parts;
-  const isHex = (value: string) => /^[0-9a-fA-F]+$/.test(value);
-
-  if (
-    !ivHex ||
-    !authTagHex ||
-    !ciphertext ||
-    ivHex.length !== 24 ||
-    authTagHex.length !== 32 ||
-    ciphertext.length % 2 !== 0 ||
-    !isHex(ivHex) ||
-    !isHex(authTagHex) ||
-    !isHex(ciphertext)
-  ) {
-    return encryptedText;
-  }
-
-  try {
-    const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, "hex"), Buffer.from(ivHex, "hex"));
-    decipher.setAuthTag(Buffer.from(authTagHex, "hex"));
-    let decrypted = decipher.update(ciphertext, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-    return decrypted;
-  } catch {
-    return encryptedText;
-  }
 }
 
 function encodeCursor(index: number): string {
@@ -678,7 +641,7 @@ export const walletsQueries = {
             requestCount: store.requestCount,
           } : null,
         } : null,
-        codes: order.codes.map(decrypt),
+        codes: order.codes.map(decryptCodeOrPlain),
         amount: order.amount,
         fee: order.fee,
         totalAmount: order.totalAmount,
@@ -793,7 +756,7 @@ export const walletsQueries = {
               requestCount: store.requestCount,
             } : null,
           } : null,
-          codes: order.codes.map(decrypt),
+          codes: order.codes.map(decryptCodeOrPlain),
           amount: order.amount,
           fee: order.fee,
           totalAmount: order.totalAmount,
@@ -954,7 +917,7 @@ export const walletsQueries = {
               requestCount: store.requestCount,
             } : null,
           } : null,
-          codes: order.codes.map(decrypt),
+          codes: order.codes.map(decryptCodeOrPlain),
           amount: order.amount,
           fee: order.fee,
           totalAmount: order.totalAmount,
@@ -2679,7 +2642,7 @@ export const walletsMutations = {
             requestCount: updatedStore.requestCount,
           } : null,
         },
-        codes: order.codes.map(decrypt),
+        codes: order.codes.map(decryptCodeOrPlain),
         amount: order.amount,
         fee: order.fee,
         totalAmount: order.totalAmount,

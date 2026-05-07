@@ -1,4 +1,5 @@
 import { MongoClient, Db } from "mongodb";
+import { decryptCodeOrPlain, encryptCode } from "./utils/codeCrypto.js";
 
 let client: MongoClient;
 let db: Db;
@@ -132,6 +133,137 @@ export async function connectDB(): Promise<Db> {
     { type: "Sold codes" },
     { $set: { type: "SoldCodes" } }
   );
+
+  // Backfill: normalize legacy 16-byte-IV encrypted product codes to standard 12-byte-IV payloads.
+  // Idempotent: only targets code entries with 32-hex IV prefix (legacy format).
+  const legacyEncryptedCodePattern = /^[0-9a-fA-F]{32}:[0-9a-fA-F]{32}:[0-9a-fA-F]+$/;
+  const productsCursor = catalogsDb
+    .collection("Products")
+    .find({
+      $or: [
+        {
+          availableCodes: {
+            $elemMatch: {
+              $type: "string",
+              $regex: legacyEncryptedCodePattern,
+            },
+          },
+        },
+        {
+          soldCodes: {
+            $elemMatch: {
+              $type: "string",
+              $regex: legacyEncryptedCodePattern,
+            },
+          },
+        },
+      ],
+    })
+    .project({ _id: 1, availableCodes: 1, soldCodes: 1 });
+
+  const productBulkOps: any[] = [];
+  let normalizedProductsCount = 0;
+
+  const normalizeCodes = (codes: unknown): { values: string[]; changed: boolean } => {
+    const arr = Array.isArray(codes) ? codes : [];
+    let changed = false;
+
+    const values = arr.map((entry) => {
+      if (typeof entry !== "string") return String(entry ?? "");
+      if (!legacyEncryptedCodePattern.test(entry)) return entry;
+
+      const plain = decryptCodeOrPlain(entry);
+      if (plain === entry) return entry;
+
+      changed = true;
+      return encryptCode(plain);
+    });
+
+    return { values, changed };
+  };
+
+  for await (const product of productsCursor) {
+    const nextAvailable = normalizeCodes(product.availableCodes);
+    const nextSold = normalizeCodes(product.soldCodes);
+
+    if (!nextAvailable.changed && !nextSold.changed) continue;
+
+    productBulkOps.push({
+      updateOne: {
+        filter: { _id: product._id as any },
+        update: {
+          $set: {
+            availableCodes: nextAvailable.values,
+            soldCodes: nextSold.values,
+          },
+        },
+      },
+    });
+    normalizedProductsCount += 1;
+
+    if (productBulkOps.length >= 500) {
+      await catalogsDb.collection("Products").bulkWrite(productBulkOps, { ordered: false });
+      productBulkOps.length = 0;
+    }
+  }
+
+  if (productBulkOps.length > 0) {
+    await catalogsDb.collection("Products").bulkWrite(productBulkOps, { ordered: false });
+  }
+
+  if (normalizedProductsCount > 0) {
+    console.log(`✅ Normalized encrypted codes to 12-byte IV for ${normalizedProductsCount} product(s)`);
+  }
+
+  // Backfill: decrypt legacy encrypted purchased codes stored on orders.
+  // Idempotent: only targets orders whose code entries still match encrypted payload format.
+  const encryptedCodePattern = /^[0-9a-fA-F]{24,32}:[0-9a-fA-F]{32}:[0-9a-fA-F]+$/;
+  const encryptedOrdersCursor = walletsDb
+    .collection("Orders")
+    .find({
+      codes: {
+        $elemMatch: {
+          $type: "string",
+          $regex: encryptedCodePattern,
+        },
+      },
+    })
+    .project({ _id: 1, codes: 1 });
+
+  const bulkOps: any[] = [];
+  let decryptedOrdersCount = 0;
+
+  for await (const order of encryptedOrdersCursor) {
+    const rawCodes = Array.isArray(order.codes) ? order.codes : [];
+    const nextCodes = rawCodes.map((code) => {
+      if (typeof code !== "string") return code;
+      return decryptCodeOrPlain(code);
+    });
+
+    const hasChanges = nextCodes.some((code, idx) => code !== rawCodes[idx]);
+    if (!hasChanges) continue;
+
+    bulkOps.push({
+      updateOne: {
+        filter: { _id: order._id as any },
+        update: { $set: { codes: nextCodes } },
+      },
+    });
+    decryptedOrdersCount += 1;
+
+    if (bulkOps.length >= 500) {
+      await walletsDb.collection("Orders").bulkWrite(bulkOps, { ordered: false });
+      bulkOps.length = 0;
+    }
+  }
+
+  if (bulkOps.length > 0) {
+    await walletsDb.collection("Orders").bulkWrite(bulkOps, { ordered: false });
+  }
+
+  if (decryptedOrdersCount > 0) {
+    console.log(`✅ Decrypted purchased codes for ${decryptedOrdersCount} order(s)`);
+  }
 
   return db;
 }

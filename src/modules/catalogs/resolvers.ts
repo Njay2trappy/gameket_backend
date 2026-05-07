@@ -3,6 +3,7 @@ import { allGroups } from "../../../data/categories/index.js";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import { getCatalogsDB, getDB, getWalletsDB } from "../../db.js";
+import { encryptCode, decryptCodeOrPlain } from "../../utils/codeCrypto.js";
 import type {
   Product,
   PromotedProduct,
@@ -23,8 +24,6 @@ import countryData from "../../../data/country.json";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
-
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY!;
 
 const smtpTransporter = nodemailer.createTransport({
   host: "gameket.io",
@@ -109,26 +108,6 @@ function sanitizeTextInput(value: string, fieldName: string, maxLength: number =
   }
   return sanitized;
 }
-const ALGORITHM = "aes-256-gcm";
-
-function encrypt(text: string): string {
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, "hex"), iv);
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
-  const authTag = cipher.getAuthTag().toString("hex");
-  return `${iv.toString("hex")}:${authTag}:${encrypted}`;
-}
-
-function decrypt(encryptedText: string): string {
-  const [ivHex, authTagHex, ciphertext] = encryptedText.split(":");
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(ENCRYPTION_KEY, "hex"), Buffer.from(ivHex, "hex"));
-  decipher.setAuthTag(Buffer.from(authTagHex, "hex"));
-  let decrypted = decipher.update(ciphertext, "hex", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
-}
-
 const validRegions = new Set([
   ...Object.values(countryData.countries).map((c) => c.toLowerCase()),
   ...Object.values(countryData.regions).map((r) => r.toLowerCase()),
@@ -318,8 +297,8 @@ export const catalogsQueries = {
       };
     }
 
-    const allAvailable = product.availableCodes.map((c) => decrypt(c));
-    const allSold = (product.soldCodes || []).map((c) => decrypt(c));
+    const allAvailable = product.availableCodes.map((c) => decryptCodeOrPlain(c));
+    const allSold = (product.soldCodes || []).map((c) => decryptCodeOrPlain(c));
 
     function paginateCodes(codes: string[]) {
       const total = codes.length;
@@ -1632,7 +1611,7 @@ export const catalogsMutations = {
     }
 
     // Encrypt each code
-    const encryptedCodes = codes.map((code) => encrypt(code.trim()));
+    const encryptedCodes = codes.map((code) => encryptCode(code.trim()));
 
     // Push codes and increment available count
     await catalogsDB.collection<Product>("Products").updateOne(
@@ -1858,7 +1837,7 @@ export const catalogsMutations = {
     const toKeep: string[] = [];
 
     for (const encrypted of product.availableCodes) {
-      const decrypted = decrypt(encrypted);
+      const decrypted = decryptCodeOrPlain(encrypted);
       if (codesToDelete.has(decrypted)) {
         toRemove.push(encrypted);
         codesToDelete.delete(decrypted);
