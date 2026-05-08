@@ -18,6 +18,11 @@ export async function connectDB(): Promise<Db> {
   walletsDb = client.db("Wallets");
   catalogsDb = client.db("Catalogs");
 
+  await db.collection("AuditLogs").createIndex({ createdAt: -1 });
+  await db.collection("AuditLogs").createIndex({ eventName: 1, createdAt: -1 });
+  await db.collection("AuditLogs").createIndex({ actorId: 1, createdAt: -1 });
+  await db.collection("AuditLogs").createIndex({ targetId: 1, createdAt: -1 });
+
   console.log("✅ Connected to MongoDB");
 
   // Backfill createdAt for existing stores that don't have it

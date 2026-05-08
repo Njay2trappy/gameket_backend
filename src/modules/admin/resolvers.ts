@@ -1,12 +1,13 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
 import { GraphQLError } from "graphql";
 import { v4 as uuidv4 } from "uuid";
 import nodemailer from "nodemailer";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
+import { recordAuditEvent } from "../../audit.js";
 import type { User, Store, Premium, Transaction, Product, Order, Account, VerificationRequest, Support, Balance, Dispute, DisputeMessage, Withdrawal } from "../../types.js";
 import type { Context } from "../../index.js";
 import { catalogsMutations, catalogsQueries } from "../catalogs/resolvers.js";
@@ -185,7 +186,7 @@ const sendOrderStatusUpdateEmails = async (
       });
 
       return smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
+        from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
         to: recipient.email,
         subject: "Order Status Updated",
         html,
@@ -287,6 +288,36 @@ function toAdminWithdrawalNode(withdrawal: Withdrawal) {
     processedBy: withdrawal.processedBy,
   };
 }
+
+const recordAdminWithdrawalDecision = async (input: {
+  eventName: "WITHDRAWAL_APPROVED" | "WITHDRAWAL_DECLINED";
+  outcome: "success" | "failure";
+  reason: string;
+  context: Context;
+  withdrawalId: string;
+  targetUserId?: string | null;
+  metadata?: Record<string, unknown>;
+}) => {
+  const actorType = input.context.user?.role === "admin" ? "admin" : "anonymous";
+  const actorId = input.context.user?.userId || null;
+
+  await recordAuditEvent({
+    eventName: input.eventName,
+    category: "withdrawal",
+    outcome: input.outcome,
+    actorType,
+    actorId,
+    requestId: input.context.requestId,
+    targetType: "withdrawal",
+    targetId: input.withdrawalId,
+    metadata: {
+      reason: input.reason,
+      withdrawalId: input.withdrawalId,
+      targetUserId: input.targetUserId || null,
+      ...(input.metadata || {}),
+    },
+  });
+};
 
 async function buildAdminUsersConnection(
   filter: Partial<Pick<User, "isStore" | "isSuspended">>,
@@ -1602,7 +1633,7 @@ export const adminMutations = {
 
     try {
       await smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
+        from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
         to: user.email,
         subject: "Welcome to Gameket",
         html: renderWelcomeEmail(user),
@@ -1621,9 +1652,34 @@ export const adminMutations = {
 
   adminLogin: async (
     _: unknown,
-    { input }: { input: { email: string; password: string } }
+    { input }: { input: { email: string; password: string } },
+    context: Context
   ) => {
     const ip = input.email.trim().toLowerCase();
+    const emailHash = createHash("sha256").update(ip).digest("hex");
+    const requestId = context.requestId;
+
+    const auditAdminLogin = async (
+      outcome: "success" | "failure",
+      reason: string,
+      metadata: Record<string, unknown> = {}
+    ) => {
+      await recordAuditEvent({
+        eventName: outcome === "success" ? "LOGIN_SUCCESS" : "LOGIN_FAILURE",
+        category: "auth",
+        outcome,
+        actorType: outcome === "success" ? "admin" : "anonymous",
+        actorId: outcome === "success" ? "admin" : null,
+        requestId,
+        targetType: "admin",
+        targetId: "admin",
+        metadata: {
+          reason,
+          emailHash,
+          ...metadata,
+        },
+      });
+    };
 
     // Rate limiting
     const now = Date.now();
@@ -1631,6 +1687,7 @@ export const adminMutations = {
     if (attempt) {
       if (attempt.lockedUntil > now) {
         const minutesLeft = Math.ceil((attempt.lockedUntil - now) / 60000);
+        await auditAdminLogin("failure", "RATE_LIMITED", { minutesLeft });
         return { code: 429, success: false, message: `Too many attempts. Try again in ${minutesLeft} minute(s)`, token: null };
       }
       if (attempt.lockedUntil <= now && attempt.count >= MAX_ADMIN_ATTEMPTS) {
@@ -1642,6 +1699,7 @@ export const adminMutations = {
 
     const adminDoc = await db.collection("Admin").findOne({ key: "admin" });
     if (!adminDoc) {
+      await auditAdminLogin("failure", "ADMIN_CONFIG_MISSING");
       return { code: 500, success: false, message: "Admin configuration missing", token: null };
     }
 
@@ -1653,6 +1711,7 @@ export const adminMutations = {
         current.lockedUntil = now + ADMIN_LOCKOUT_DURATION;
       }
       adminLoginAttempts.set(ip, current);
+      await auditAdminLogin("failure", "INVALID_EMAIL", { attemptCount: current.count });
       return { code: 401, success: false, message: "Invalid credentials", token: null };
     }
 
@@ -1664,6 +1723,7 @@ export const adminMutations = {
         current.lockedUntil = now + ADMIN_LOCKOUT_DURATION;
       }
       adminLoginAttempts.set(ip, current);
+      await auditAdminLogin("failure", "INVALID_PASSWORD", { attemptCount: current.count });
       return { code: 401, success: false, message: "Invalid credentials", token: null };
     }
 
@@ -1687,6 +1747,8 @@ export const adminMutations = {
       adminSecret,
       { expiresIn: "15m" }
     );
+
+    await auditAdminLogin("success", "ADMIN_LOGIN_SUCCESS", { tokenVersion: newTokenVersion });
 
     return { code: 200, success: true, message: "Admin login successful", token };
   },
@@ -1804,7 +1866,7 @@ export const adminMutations = {
       try {
         const html = renderUserSuspendedEmail(updatedUser, new Date().toISOString());
         await smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
           to: updatedUser.email,
           subject: "Account Suspended - Action Required",
           html,
@@ -2441,10 +2503,28 @@ export const adminMutations = {
 
     const existing = await withdrawals.findOne({ withdrawalId });
     if (!existing) {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_APPROVED",
+        outcome: "failure",
+        reason: "WITHDRAWAL_NOT_FOUND",
+        context,
+        withdrawalId,
+      });
       return { code: 404, success: false, message: "Withdrawal request not found", withdrawal: null };
     }
 
     if (existing.status !== "pending") {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_APPROVED",
+        outcome: "failure",
+        reason: "WITHDRAWAL_NOT_PENDING",
+        context,
+        withdrawalId,
+        targetUserId: existing.userId,
+        metadata: {
+          currentStatus: existing.status,
+        },
+      });
       return {
         code: 400,
         success: false,
@@ -2459,6 +2539,14 @@ export const adminMutations = {
     );
 
     if (balanceUpdate.modifiedCount === 0) {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_APPROVED",
+        outcome: "failure",
+        reason: "SUSPENDED_BALANCE_INSUFFICIENT",
+        context,
+        withdrawalId,
+        targetUserId: existing.userId,
+      });
       return {
         code: 409,
         success: false,
@@ -2487,7 +2575,7 @@ export const adminMutations = {
         try {
           const html = renderWithdrawalStatusUpdateEmail(user, updated, "approved");
           await smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: user.email,
             subject: "Withdrawal Status Update",
             html,
@@ -2496,6 +2584,27 @@ export const adminMutations = {
           console.error("Failed to send withdrawal approval email:", error);
         }
       }
+
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_APPROVED",
+        outcome: "success",
+        reason: "WITHDRAWAL_APPROVED",
+        context,
+        withdrawalId,
+        targetUserId: updated.userId,
+        metadata: {
+          transactionId: updated.transactionId,
+          amount: updated.amount,
+        },
+      });
+    } else {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_APPROVED",
+        outcome: "failure",
+        reason: "WITHDRAWAL_POST_UPDATE_NOT_FOUND",
+        context,
+        withdrawalId,
+      });
     }
 
     return {
@@ -2523,10 +2632,28 @@ export const adminMutations = {
 
     const existing = await withdrawals.findOne({ withdrawalId });
     if (!existing) {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_DECLINED",
+        outcome: "failure",
+        reason: "WITHDRAWAL_NOT_FOUND",
+        context,
+        withdrawalId,
+      });
       return { code: 404, success: false, message: "Withdrawal request not found", withdrawal: null };
     }
 
     if (existing.status !== "pending") {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_DECLINED",
+        outcome: "failure",
+        reason: "WITHDRAWAL_NOT_PENDING",
+        context,
+        withdrawalId,
+        targetUserId: existing.userId,
+        metadata: {
+          currentStatus: existing.status,
+        },
+      });
       return {
         code: 400,
         success: false,
@@ -2541,6 +2668,14 @@ export const adminMutations = {
     );
 
     if (balanceUpdate.modifiedCount === 0) {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_DECLINED",
+        outcome: "failure",
+        reason: "SUSPENDED_BALANCE_INSUFFICIENT",
+        context,
+        withdrawalId,
+        targetUserId: existing.userId,
+      });
       return {
         code: 409,
         success: false,
@@ -2569,7 +2704,7 @@ export const adminMutations = {
         try {
           const html = renderWithdrawalStatusUpdateEmail(user, updated, "declined");
           await smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: user.email,
             subject: "Withdrawal Status Update",
             html,
@@ -2578,6 +2713,27 @@ export const adminMutations = {
           console.error("Failed to send withdrawal decline email:", error);
         }
       }
+
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_DECLINED",
+        outcome: "success",
+        reason: "WITHDRAWAL_DECLINED",
+        context,
+        withdrawalId,
+        targetUserId: updated.userId,
+        metadata: {
+          transactionId: updated.transactionId,
+          amount: updated.amount,
+        },
+      });
+    } else {
+      await recordAdminWithdrawalDecision({
+        eventName: "WITHDRAWAL_DECLINED",
+        outcome: "failure",
+        reason: "WITHDRAWAL_POST_UPDATE_NOT_FOUND",
+        context,
+        withdrawalId,
+      });
     }
 
     return {
@@ -2946,3 +3102,110 @@ export const adminMutations = {
     };
   },
 };
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+};
+
+const pickAdminTargetFromArgs = (args: unknown): { targetType: string | null; targetId: string | null } => {
+  if (!isPlainRecord(args)) {
+    return { targetType: null, targetId: null };
+  }
+
+  const targetMappings: Array<[string, string]> = [
+    ["withdrawalId", "withdrawal"],
+    ["userId", "user"],
+    ["supportId", "support"],
+    ["disputeId", "dispute"],
+    ["productId", "product"],
+    ["storeId", "store"],
+    ["orderId", "order"],
+  ];
+
+  for (const [argName, targetType] of targetMappings) {
+    const value = args[argName];
+    if (typeof value === "string" && value.trim()) {
+      return { targetType, targetId: value };
+    }
+  }
+
+  const inputValue = args.input;
+  if (isPlainRecord(inputValue)) {
+    for (const [argName, targetType] of targetMappings) {
+      const value = inputValue[argName];
+      if (typeof value === "string" && value.trim()) {
+        return { targetType, targetId: value };
+      }
+    }
+  }
+
+  return { targetType: null, targetId: null };
+};
+
+const wrapAdminActionResolver = (
+  actionName: string,
+  resolver: (parent: unknown, args: unknown, context: Context, info: unknown) => Promise<unknown>
+) => {
+  return async (parent: unknown, args: unknown, context: Context, info: unknown) => {
+    const actorType = context.user?.role === "admin" ? "admin" : "anonymous";
+    const actorId = actorType === "admin" ? context.user?.userId || null : null;
+    const { targetType, targetId } = pickAdminTargetFromArgs(args);
+
+    try {
+      const result = await resolver(parent, args, context, info);
+      const resultRecord = isPlainRecord(result) ? result : null;
+      const success = resultRecord && "success" in resultRecord
+        ? Boolean(resultRecord.success)
+        : true;
+
+      await recordAuditEvent({
+        eventName: "ADMIN_ACTION",
+        category: "admin_action",
+        outcome: success ? "success" : "failure",
+        actorType,
+        actorId,
+        requestId: context.requestId,
+        targetType,
+        targetId,
+        metadata: {
+          actionName,
+          resultCode: resultRecord && typeof resultRecord.code === "number" ? resultRecord.code : null,
+        },
+      });
+
+      return result;
+    } catch (err) {
+      await recordAuditEvent({
+        eventName: "ADMIN_ACTION",
+        category: "admin_action",
+        outcome: "failure",
+        actorType,
+        actorId,
+        requestId: context.requestId,
+        targetType,
+        targetId,
+        metadata: {
+          actionName,
+          errorName: err instanceof Error ? err.name : "UnknownError",
+        },
+      });
+
+      throw err;
+    }
+  };
+};
+
+for (const [mutationName, mutationResolver] of Object.entries(adminMutations)) {
+  if (!mutationName.startsWith("Admin")) {
+    continue;
+  }
+
+  if (typeof mutationResolver !== "function") {
+    continue;
+  }
+
+  (adminMutations as Record<string, unknown>)[mutationName] = wrapAdminActionResolver(
+    mutationName,
+    mutationResolver as (parent: unknown, args: unknown, context: Context, info: unknown) => Promise<unknown>
+  );
+}

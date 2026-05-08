@@ -12,6 +12,7 @@ import { connectDB, closeDB, getDB, getWalletsDB } from "./db.js";
 import type { Account, User } from "./types.js";
 import depositRouter from "./rest/deposit.js";
 import { startCronJobs } from "./cron.js";
+import { attachRequestId, getRequestId, logger } from "./logger.js";
 
 const PORT = Number(process.env.PORT) || 4000;
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -19,6 +20,7 @@ const IS_PROD = process.env.NODE_ENV === "production";
 export interface Context {
   user: { userId: string; email: string; role?: "admin"; isSuspended?: boolean } | null;
   authError: string | null;
+  requestId: string;
 }
 
 async function main() {
@@ -37,6 +39,7 @@ async function main() {
   await server.start();
 
   // REST API routes (before GraphQL catch-all)
+  app.use(attachRequestId);
   app.use(express.json());
   app.use(depositRouter);
 
@@ -46,6 +49,7 @@ async function main() {
     express.json(),
     expressMiddleware(server, {
       context: async ({ req }) => {
+        const requestId = getRequestId(req);
         const adminAuthHeader = req.headers["adminauthorization"];
         const authHeader = req.headers.authorization;
         const adminAuth = Array.isArray(adminAuthHeader) ? adminAuthHeader[0] : (adminAuthHeader || "");
@@ -53,7 +57,7 @@ async function main() {
 
         if (adminAuth) {
           if (!adminAuth.startsWith("Bearer ")) {
-            return { user: null, authError: "Invalid AdminAuthorization token format" };
+            return { user: null, authError: "Invalid AdminAuthorization token format", requestId };
           }
 
           const token = adminAuth.slice(7);
@@ -71,13 +75,13 @@ async function main() {
             };
 
             if (adminDecoded.role !== "admin") {
-              return { user: null, authError: "Invalid admin authentication token" };
+              return { user: null, authError: "Invalid admin authentication token", requestId };
             }
 
             const db = getDB();
             const adminDoc = await db.collection("Admin").findOne({ key: "admin" });
             if (!adminDoc || adminDoc.tokenVersion !== adminDecoded.tokenVersion) {
-              return { user: null, authError: "Admin session expired. Please login again" };
+              return { user: null, authError: "Admin session expired. Please login again", requestId };
             }
 
             const adminUser = await db.collection<User>("users").findOne({
@@ -85,7 +89,7 @@ async function main() {
             });
 
             if (adminUser && !adminUser.isActive) {
-              return { user: null, authError: "Account is deactivated" };
+              return { user: null, authError: "Account is deactivated", requestId };
             }
 
             const resolvedUserId = adminUser?.id ?? adminDecoded.adminId;
@@ -93,20 +97,21 @@ async function main() {
             return {
               user: { userId: resolvedUserId, email: adminDecoded.email, role: "admin" as const, isSuspended: adminUser?.isSuspended ?? false },
               authError: null,
+              requestId,
             };
           } catch (err) {
             if (err instanceof jwt.TokenExpiredError) {
-              return { user: null, authError: "Admin authentication token has expired. Please login again" };
+              return { user: null, authError: "Admin authentication token has expired. Please login again", requestId };
             }
             if (err instanceof jwt.JsonWebTokenError) {
-              return { user: null, authError: "Invalid admin authentication token" };
+              return { user: null, authError: "Invalid admin authentication token", requestId };
             }
-            return { user: null, authError: "Admin authentication failed" };
+            return { user: null, authError: "Admin authentication failed", requestId };
           }
         }
 
         if (!auth.startsWith("Bearer ")) {
-          return { user: null, authError: "No authentication token provided" };
+          return { user: null, authError: "No authentication token provided", requestId };
         }
 
         const token = auth.slice(7);
@@ -123,38 +128,38 @@ async function main() {
             .findOne({ userId: decoded.userId });
 
           if (!account || account.tokenVersion !== decoded.tokenVersion) {
-            return { user: null, authError: "Session expired. Please login again" };
+            return { user: null, authError: "Session expired. Please login again", requestId };
           }
 
           const user = await db.collection<User>("users").findOne({ id: decoded.userId });
           if (!user) {
-            return { user: null, authError: "Authentication failed" };
+            return { user: null, authError: "Authentication failed", requestId };
           }
           if (!user.isActive && !user.isSuspended) {
-            return { user: null, authError: "Account is deactivated" };
+            return { user: null, authError: "Account is deactivated", requestId };
           }
 
-          return { user: { userId: decoded.userId, email: decoded.email, isSuspended: user.isSuspended ?? false }, authError: null };
+          return { user: { userId: decoded.userId, email: decoded.email, isSuspended: user.isSuspended ?? false }, authError: null, requestId };
         } catch (err) {
           if (err instanceof jwt.TokenExpiredError) {
-            return { user: null, authError: "Authentication token has expired. Please login again" };
+            return { user: null, authError: "Authentication token has expired. Please login again", requestId };
           }
           if (err instanceof jwt.JsonWebTokenError) {
-            return { user: null, authError: "Invalid authentication token" };
+            return { user: null, authError: "Invalid authentication token", requestId };
           }
-          return { user: null, authError: "Authentication failed" };
+          return { user: null, authError: "Authentication failed", requestId };
         }
       },
     })
   );
 
   httpServer.listen(PORT, () => {
-    console.log(`🚀 Server running at http://localhost:${PORT}/`);
+    logger.info({ port: PORT }, "Server started");
     startCronJobs();
   });
 
   const shutdown = async () => {
-    console.log("\nShutting down...");
+    logger.info("Shutting down server");
     await server.stop();
     await closeDB();
     process.exit(0);
@@ -164,4 +169,6 @@ async function main() {
   process.on("SIGTERM", shutdown);
 }
 
-main().catch(console.error);
+main().catch((err: unknown) => {
+  logger.error({ err }, "Failed to start server");
+});

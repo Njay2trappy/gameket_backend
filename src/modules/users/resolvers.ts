@@ -354,7 +354,7 @@ export const usersMutations = {
         );
 
         await smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
           to: user.email,
           subject: "Premium Subscription Activated",
           html,

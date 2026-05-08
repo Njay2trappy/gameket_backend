@@ -257,7 +257,7 @@ router.post("/webhook/deposit", async (req, res) => {
           );
 
           await smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: user.email,
             subject: "Deposit Confirmed - Wallet Credited",
             html,
@@ -423,7 +423,7 @@ router.post("/webhook/deposit", async (req, res) => {
 
             mailTasks.push(
               smtpTransporter.sendMail({
-                from: process.env.SMTP_EMAIL,
+                from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
                 to: seller.email,
                 subject: "Code Sold - New Store Order",
                 html: sellerHtml,
@@ -444,7 +444,7 @@ router.post("/webhook/deposit", async (req, res) => {
 
           mailTasks.push(
             smtpTransporter.sendMail({
-              from: process.env.SMTP_EMAIL,
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
               to: deposit.userId,
               subject: "Guest Order Completed",
               html: buyerHtml,
@@ -470,7 +470,7 @@ router.post("/webhook/deposit", async (req, res) => {
           });
 
           await smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: deposit.userId,
             subject: "Guest Manual Order Pending",
             html: manualPendingHtml,

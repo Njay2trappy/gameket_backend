@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
+import { recordAuditEvent } from "../../audit.js";
 import { decryptCodeOrPlain } from "../../utils/codeCrypto.js";
 import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal, NotificationState, NotificationConflictRead } from "../../types.js";
 import type { Context } from "../../index.js";
@@ -365,7 +366,7 @@ const sendOrderStatusUpdateEmails = async (
     });
 
     return smtpTransporter.sendMail({
-      from: process.env.SMTP_EMAIL,
+      from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
       to: recipient.email,
       subject: "Order Status Updated",
       html,
@@ -2590,15 +2591,44 @@ export const walletsMutations = {
       });
     }
 
+    const requestId = context.requestId;
+    const actorId = context.user.userId;
+    const actorType = context.user.role === "admin" ? "admin" : "user";
+
+    const logWithdrawalRequest = async (
+      outcome: "success" | "failure",
+      reason: string,
+      metadata: Record<string, unknown> = {}
+    ) => {
+      await recordAuditEvent({
+        eventName: "WITHDRAWAL_REQUESTED",
+        category: "withdrawal",
+        outcome,
+        actorType,
+        actorId,
+        requestId,
+        targetType: "user",
+        targetId: context.user?.userId || null,
+        metadata: {
+          reason,
+          amount,
+          ...metadata,
+        },
+      });
+    };
+
     if (context.user.role === "admin") {
+      await logWithdrawalRequest("failure", "ADMIN_TOKEN_NOT_ALLOWED");
       return { code: 403, success: false, message: "Admin token is not allowed for user withdrawals", withdrawal: null };
     }
 
     if (context.user.isSuspended) {
+      await logWithdrawalRequest("failure", "USER_SUSPENDED");
       return { code: 403, success: false, message: "Your account is suspended. You cannot make withdrawals.", withdrawal: null };
     }
 
     if (!Number.isFinite(amount) || amount <= 0) {
+      await logWithdrawalRequest("failure", "INVALID_AMOUNT");
       return { code: 400, success: false, message: "Amount must be greater than 0", withdrawal: null };
     }
 
@@ -2609,6 +2639,9 @@ export const walletsMutations = {
     const payoutAmount = parseFloat((withdrawalAmount - totalFee).toFixed(2));
 
     if (payoutAmount <= 0) {
+      await logWithdrawalRequest("failure", "AMOUNT_TOO_LOW_AFTER_FEES", {
+        payoutAmount,
+      });
       return { code: 400, success: false, message: "Amount is too low after fees", withdrawal: null };
     }
 
@@ -2618,21 +2651,27 @@ export const walletsMutations = {
 
     const user = await db.collection<User>("users").findOne({ id: userId });
     if (!user) {
+      await logWithdrawalRequest("failure", "USER_NOT_FOUND");
       return { code: 404, success: false, message: "User not found", withdrawal: null };
     }
 
     const balances = walletsDB.collection<Balance>("Balances");
     const balance = await balances.findOne({ userId });
     if (!balance) {
+      await logWithdrawalRequest("failure", "WALLET_NOT_FOUND");
       return { code: 404, success: false, message: "Wallet not found", user, withdrawal: null };
     }
 
     const activeMethod = balance.methods.find((method) => method.isActive);
     if (!activeMethod) {
+      await logWithdrawalRequest("failure", "NO_ACTIVE_PAYOUT_METHOD");
       return { code: 400, success: false, message: "Add an active wallet option before making a withdrawal", user, withdrawal: null };
     }
 
     if (balance.availableBalance < withdrawalAmount) {
+      await logWithdrawalRequest("failure", "INSUFFICIENT_BALANCE", {
+        availableBalance: balance.availableBalance,
+      });
       return { code: 400, success: false, message: "Insufficient balance", user, withdrawal: null };
     }
 
@@ -2642,6 +2681,7 @@ export const walletsMutations = {
     );
 
     if (balanceUpdate.modifiedCount === 0) {
+      await logWithdrawalRequest("failure", "BALANCE_RESERVATION_FAILED");
       return { code: 400, success: false, message: "Insufficient balance", user, withdrawal: null };
     }
 
@@ -2683,6 +2723,13 @@ export const walletsMutations = {
     await walletsDB.collection<Transaction>("Transactions").insertOne(transactionRecord);
     await walletsDB.collection<Withdrawal>("Withdrawals").insertOne(withdrawalRecord);
 
+    await logWithdrawalRequest("success", "WITHDRAWAL_CREATED", {
+      withdrawalId,
+      transactionId,
+      payoutAmount,
+      totalFee,
+    });
+
     if (shouldSendEmailForUser(user)) {
       try {
         const html = renderWithdrawalRequestEmail(
@@ -2692,7 +2739,7 @@ export const walletsMutations = {
         );
 
         await smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
           to: user.email,
           subject: "Withdrawal Request Received",
           html,
@@ -2935,7 +2982,7 @@ export const walletsMutations = {
 
         mailTasks.push(
           smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: seller.email,
             subject: "Code Sold - New Store Order",
             html: sellerHtml,
@@ -2958,7 +3005,7 @@ export const walletsMutations = {
 
         mailTasks.push(
           smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: user.email,
             subject: "Your Order Summary",
             html: buyerHtml,
@@ -3261,7 +3308,7 @@ export const walletsMutations = {
 
         mailTasks.push(
           smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: user.email,
             subject: "Manual Order Pending",
             html: buyerHtml,
@@ -3283,7 +3330,7 @@ export const walletsMutations = {
 
         mailTasks.push(
           smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: seller.email,
             subject: "New Manual Order Pending",
             html: sellerHtml,
@@ -3899,7 +3946,7 @@ export const walletsMutations = {
         if (shouldSendEmailForUser(user)) {
           mailTasks.push(
             smtpTransporter.sendMail({
-              from: process.env.SMTP_EMAIL,
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
               to: user.email,
               subject: "Manual Order Fulfilled",
               html: sellerHtml,
@@ -3924,7 +3971,7 @@ export const walletsMutations = {
 
             mailTasks.push(
               smtpTransporter.sendMail({
-                from: process.env.SMTP_EMAIL,
+                from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
                 to: guestDeposit.userId,
                 subject: "Your Manual Order Summary",
                 html: guestSummaryHtml,
@@ -3948,7 +3995,7 @@ export const walletsMutations = {
 
             mailTasks.push(
               smtpTransporter.sendMail({
-                from: process.env.SMTP_EMAIL,
+                from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
                 to: buyer.email,
                 subject: "Manual Order Fulfilled",
                 html: buyerHtml,

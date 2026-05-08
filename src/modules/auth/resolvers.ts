@@ -10,6 +10,8 @@ import nodemailer from "nodemailer";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
+import { recordAuditEvent } from "../../audit.js";
+import { logger } from "../../logger.js";
 import type { User, Account, Balance, Store } from "../../types.js";
 import type { Context } from "../../index.js";
 
@@ -336,13 +338,13 @@ export const authMutations = {
 
     const emailSendResults = await Promise.allSettled([
       smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
+        from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
         to: user.email,
         subject: "Welcome to Gameket",
         html: renderWelcomeEmail(user),
       }),
       smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
+        from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
         to: user.email,
         subject: "Verify your Gameket account",
         html: renderVerificationEmail(user, verificationToken),
@@ -354,10 +356,10 @@ export const authMutations = {
     const confirmSent = confirmResult.status === "fulfilled";
 
     if (!welcomeSent) {
-      console.error("Failed to send welcome email during registration:", welcomeResult.reason);
+      logger.error({ err: welcomeResult.reason, userId }, "Failed to send welcome email during registration");
     }
     if (!confirmSent) {
-      console.error("Failed to send verification email during registration:", confirmResult.reason);
+      logger.error({ err: confirmResult.reason, userId }, "Failed to send verification email during registration");
     }
 
     let message = "Registration successful. Welcome and verification emails have been sent.";
@@ -374,19 +376,41 @@ export const authMutations = {
 
   login: async (
     _: unknown,
-    { input }: { input: { email: string; password: string } }
+    { input }: { input: { email: string; password: string } },
+    context: Context
   ) => {
     const db = getDB();
     const accounts = db.collection<Account>("accounts");
     const users = db.collection<User>("users");
 
     const email = input.email.trim().toLowerCase();
+    const emailHash = createHash("sha256").update(email).digest("hex");
     const password = input.password;
+    const requestId = context.requestId;
 
     let account = await accounts.findOne({
       email: { $regex: `^${escapeRegex(email)}$`, $options: "i" },
     });
     let user: User | null = null;
+
+    const loginFailure = async (code: number, message: string, reason: string) => {
+      await recordAuditEvent({
+        eventName: "LOGIN_FAILURE",
+        category: "auth",
+        outcome: "failure",
+        actorType: "anonymous",
+        actorId: null,
+        requestId,
+        targetType: "user",
+        targetId: user?.id || account?.userId || null,
+        metadata: {
+          reason,
+          emailHash,
+        },
+      });
+
+      return loginFailureResponse(code, message);
+    };
 
     if (account) {
       user = await users.findOne({ id: account.userId });
@@ -407,16 +431,16 @@ export const authMutations = {
     }
 
     if (!account || !user) {
-      return loginFailureResponse(401, "Invalid email or password");
+      return loginFailure(401, "Invalid email or password", "ACCOUNT_OR_USER_NOT_FOUND");
     }
 
     if (account.authProvider === "google") {
-      return loginFailureResponse(400, "This email is registered with Google. Please sign in with Google.");
+      return loginFailure(400, "This email is registered with Google. Please sign in with Google.", "GOOGLE_AUTH_PROVIDER");
     }
 
     const valid = await bcrypt.compare(password, account.password || "");
     if (!valid) {
-      return loginFailureResponse(401, "Invalid email or password");
+      return loginFailure(401, "Invalid email or password", "INVALID_PASSWORD");
     }
 
     if (account.email !== user.email && email === user.email) {
@@ -435,7 +459,7 @@ export const authMutations = {
         tokenVersion: account.tokenVersion ?? 0,
       });
 
-      return {
+      const response = {
         code: 200,
         success: true,
         message: "Two-factor verification required",
@@ -444,6 +468,23 @@ export const authMutations = {
         requiresTwoFactor: true,
         twoFactorToken,
       };
+
+      await recordAuditEvent({
+        eventName: "LOGIN_SUCCESS",
+        category: "auth",
+        outcome: "success",
+        actorType: "user",
+        actorId: user.id,
+        requestId,
+        targetType: "user",
+        targetId: user.id,
+        metadata: {
+          requiresTwoFactor: true,
+          emailHash,
+        },
+      });
+
+      return response;
     }
 
     // Increment tokenVersion to invalidate all previous sessions
@@ -455,6 +496,22 @@ export const authMutations = {
     );
 
     const token = issueLoginToken(user, newTokenVersion);
+
+    await recordAuditEvent({
+      eventName: "LOGIN_SUCCESS",
+      category: "auth",
+      outcome: "success",
+      actorType: "user",
+      actorId: user.id,
+      requestId,
+      targetType: "user",
+      targetId: user.id,
+      metadata: {
+        requiresTwoFactor: false,
+        tokenVersion: newTokenVersion,
+        emailHash,
+      },
+    });
 
     return {
       code: 200,
@@ -1055,7 +1112,7 @@ export const authMutations = {
 
     try {
       await smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
+        from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
         to: user.email,
         subject: "Verify your Gameket account",
         html: renderVerificationEmail(user, verificationToken),
@@ -1068,7 +1125,7 @@ export const authMutations = {
         );
       }
 
-      console.error("Failed to send verification email:", emailError);
+      logger.error({ err: emailError, userId }, "Failed to send verification email");
       return { code: 500, success: false, message: "Failed to send verification email" };
     }
 
@@ -1124,15 +1181,41 @@ export const authMutations = {
 
   forgotPassword: async (
     _: unknown,
-    { input }: { input: { email: string } }
+    { input }: { input: { email: string } },
+    context: Context
   ) => {
     const email = input.email.trim().toLowerCase();
+    const emailHash = createHash("sha256").update(email).digest("hex");
+    const requestId = context.requestId;
+
+    const logPasswordResetRequest = async (
+      outcome: "success" | "failure",
+      reason: string,
+      targetId: string | null
+    ) => {
+      await recordAuditEvent({
+        eventName: "PASSWORD_RESET_REQUESTED",
+        category: "password_reset",
+        outcome,
+        actorType: "anonymous",
+        actorId: null,
+        requestId,
+        targetType: "user",
+        targetId,
+        metadata: {
+          reason,
+          emailHash,
+        },
+      });
+    };
 
     if (email.length > 254) {
+      await logPasswordResetRequest("failure", "EMAIL_TOO_LONG", null);
       return { code: 400, success: false, message: "Email is too long" };
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      await logPasswordResetRequest("failure", "INVALID_EMAIL_FORMAT", null);
       return { code: 400, success: false, message: "Invalid email format" };
     }
 
@@ -1143,15 +1226,18 @@ export const authMutations = {
     const account = await accounts.findOne({ email });
     if (!account) {
       // Generic response prevents account enumeration
+      await logPasswordResetRequest("success", "ACCOUNT_NOT_FOUND", null);
       return { code: 200, success: true, message: "If the email exists, an OTP has been sent" };
     }
 
     if (account.authProvider === "google") {
+      await logPasswordResetRequest("failure", "GOOGLE_AUTH_PROVIDER", account.userId);
       return { code: 400, success: false, message: "This account uses Google sign-in. Please sign in with Google." };
     }
 
     const user = await users.findOne({ id: account.userId });
     if (!user) {
+      await logPasswordResetRequest("failure", "USER_NOT_FOUND", account.userId);
       return { code: 404, success: false, message: "User not found" };
     }
 
@@ -1166,7 +1252,7 @@ export const authMutations = {
 
     try {
       await smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
+        from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
         to: user.email,
         subject: "Your password reset OTP",
         html: renderPasswordResetOtpEmail(user, otp),
@@ -1177,46 +1263,83 @@ export const authMutations = {
         { $set: { passwordResetOtp: null, passwordResetOtpExpiresAt: null } }
       );
 
-      console.error("Failed to send password reset OTP email:", emailError);
+      logger.error({ err: emailError, email }, "Failed to send password reset OTP email");
+      await logPasswordResetRequest("failure", "EMAIL_SEND_FAILED", account.userId);
       return { code: 500, success: false, message: "Failed to send password reset OTP email" };
     }
+
+    await logPasswordResetRequest("success", "OTP_ISSUED", account.userId);
 
     return { code: 200, success: true, message: "If the email exists, an OTP has been sent" };
   },
 
   resetPassword: async (
     _: unknown,
-    { input }: { input: { email: string; password: string; otp: string } }
+    { input }: { input: { email: string; password: string; otp: string } },
+    context: Context
   ) => {
     const email = input.email.trim().toLowerCase();
+    const emailHash = createHash("sha256").update(email).digest("hex");
     const password = input.password;
     const otp = input.otp.trim();
+    const requestId = context.requestId;
+
+    const logPasswordResetCompletion = async (
+      outcome: "success" | "failure",
+      reason: string,
+      targetId: string | null,
+      metadata: Record<string, unknown> = {}
+    ) => {
+      await recordAuditEvent({
+        eventName: "PASSWORD_RESET_COMPLETED",
+        category: "password_reset",
+        outcome,
+        actorType: "anonymous",
+        actorId: null,
+        requestId,
+        targetType: "user",
+        targetId,
+        metadata: {
+          reason,
+          emailHash,
+          ...metadata,
+        },
+      });
+    };
 
     if (email.length > 254) {
+      await logPasswordResetCompletion("failure", "EMAIL_TOO_LONG", null);
       return { code: 400, success: false, message: "Email is too long" };
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
+      await logPasswordResetCompletion("failure", "INVALID_EMAIL_FORMAT", null);
       return { code: 400, success: false, message: "Invalid email format" };
     }
 
     if (!/^\d{6}$/.test(otp)) {
+      await logPasswordResetCompletion("failure", "INVALID_OTP_FORMAT", null);
       return { code: 400, success: false, message: "OTP must be a 6-digit code" };
     }
 
     if (password.length < 8) {
+      await logPasswordResetCompletion("failure", "PASSWORD_TOO_SHORT", null);
       return { code: 400, success: false, message: "Password must be at least 8 characters" };
     }
     if (password.length > 128) {
+      await logPasswordResetCompletion("failure", "PASSWORD_TOO_LONG", null);
       return { code: 400, success: false, message: "Password must be at most 128 characters" };
     }
     if (!/[A-Z]/.test(password)) {
+      await logPasswordResetCompletion("failure", "PASSWORD_MISSING_UPPERCASE", null);
       return { code: 400, success: false, message: "Password must contain at least one uppercase letter" };
     }
     if (!/[a-z]/.test(password)) {
+      await logPasswordResetCompletion("failure", "PASSWORD_MISSING_LOWERCASE", null);
       return { code: 400, success: false, message: "Password must contain at least one lowercase letter" };
     }
     if (!/[0-9]/.test(password)) {
+      await logPasswordResetCompletion("failure", "PASSWORD_MISSING_NUMBER", null);
       return { code: 400, success: false, message: "Password must contain at least one number" };
     }
 
@@ -1225,14 +1348,17 @@ export const authMutations = {
 
     const account = await accounts.findOne({ email });
     if (!account) {
+      await logPasswordResetCompletion("failure", "INVALID_RESET_DETAILS", null);
       return { code: 400, success: false, message: "Invalid reset details" };
     }
 
     if (account.authProvider === "google") {
+      await logPasswordResetCompletion("failure", "GOOGLE_AUTH_PROVIDER", account.userId);
       return { code: 400, success: false, message: "This account uses Google sign-in. Please sign in with Google." };
     }
 
     if (!account.passwordResetOtp || !account.passwordResetOtpExpiresAt) {
+      await logPasswordResetCompletion("failure", "OTP_NOT_REQUESTED", account.userId);
       return { code: 400, success: false, message: "No password reset OTP was requested" };
     }
 
@@ -1241,6 +1367,7 @@ export const authMutations = {
         { email },
         { $set: { passwordResetOtp: null, passwordResetOtpExpiresAt: null } }
       );
+      await logPasswordResetCompletion("failure", "OTP_EXPIRED", account.userId);
       return { code: 400, success: false, message: "Password reset OTP has expired" };
     }
 
@@ -1250,6 +1377,7 @@ export const authMutations = {
       : storedOtp === otp;
 
     if (!otpMatches) {
+      await logPasswordResetCompletion("failure", "INVALID_OTP", account.userId);
       return { code: 400, success: false, message: "Invalid password reset OTP" };
     }
 
@@ -1267,6 +1395,10 @@ export const authMutations = {
         },
       }
     );
+
+    await logPasswordResetCompletion("success", "PASSWORD_UPDATED", account.userId, {
+      tokenVersion: newTokenVersion,
+    });
 
     return { code: 200, success: true, message: "Password reset successful. Please login with your new password." };
   },

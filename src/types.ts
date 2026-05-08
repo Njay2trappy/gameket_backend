@@ -291,3 +291,31 @@ export interface RefundOffer {
   status: string;
   createdAt: string;
 }
+
+export type AuditEventName =
+  | "LOGIN_SUCCESS"
+  | "LOGIN_FAILURE"
+  | "PASSWORD_RESET_REQUESTED"
+  | "PASSWORD_RESET_COMPLETED"
+  | "WITHDRAWAL_REQUESTED"
+  | "WITHDRAWAL_APPROVED"
+  | "WITHDRAWAL_DECLINED"
+  | "ADMIN_ACTION";
+
+export type AuditCategory = "auth" | "password_reset" | "withdrawal" | "admin_action";
+export type AuditOutcome = "success" | "failure";
+export type AuditActorType = "anonymous" | "user" | "admin" | "system";
+
+export interface AuditLog {
+  auditId: string;
+  eventName: AuditEventName;
+  category: AuditCategory;
+  outcome: AuditOutcome;
+  actorType: AuditActorType;
+  actorId: string | null;
+  requestId: string | null;
+  targetType: string | null;
+  targetId: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}

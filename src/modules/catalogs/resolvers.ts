@@ -2615,7 +2615,7 @@ export const catalogsMutations = {
         const ppExt = ppContentType.split("/")[1];
 
         await smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
           to: adminEmail,
           subject: "New Store Access Request - Gameket",
           html: `
@@ -2766,7 +2766,7 @@ export const catalogsMutations = {
         });
 
         await smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
           to: owner.email,
           subject: "Store Status Updated",
           html,
@@ -2859,7 +2859,7 @@ export const catalogsMutations = {
         });
 
         await smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
           to: owner.email,
           subject: "Store Status Updated",
           html,
