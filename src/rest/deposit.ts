@@ -2,6 +2,11 @@ import { Router } from "express";
 import { randomBytes } from "crypto";
 import { getDB, getWalletsDB, getCatalogsDB } from "../db.js";
 import { decryptCodeOrPlain } from "../utils/codeCrypto.js";
+import {
+  dispatchApiOrderCallback,
+  isApiFulfillmentProduct,
+  resolveApiCallbackUrl,
+} from "../utils/productFulfillment.js";
 import type { Deposit, Transaction, Balance, Order, Product, Store, User } from "../types.js";
 import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
@@ -291,8 +296,21 @@ router.post("/webhook/deposit", async (req, res) => {
     if (status === "completed") {
       const catalogsDB = getCatalogsDB();
       const product = await catalogsDB.collection<Product>("Products").findOne({ productId: deposit.productId });
+      const isManual = product ? product.type === "Manual" : false;
+      const isApiFulfillment = product ? isApiFulfillmentProduct(product) : false;
+      const callbackUrl = product ? resolveApiCallbackUrl(product) : null;
+
+      if (isApiFulfillment && !callbackUrl) {
+        await walletsDB.collection<Deposit>("Deposits").updateOne(
+          { payId: txnid },
+          { $set: { status: "failed" } }
+        );
+        res.status(400).json({ success: false, message: "API callback URL is missing or invalid for this product" });
+        return;
+      }
+
       const availableStock = product
-        ? (product.type === "Manual" ? product.available : product.availableCodes.length)
+        ? ((isManual || isApiFulfillment) ? product.available : product.availableCodes.length)
         : 0;
 
       if (!product || availableStock < deposit.quantity) {
@@ -305,18 +323,17 @@ router.post("/webhook/deposit", async (req, res) => {
       }
 
       const quantity = deposit.quantity;
-      const purchasedCodes = product.type === "Manual"
+      const purchasedCodes = (isManual || isApiFulfillment)
         ? []
         : product.availableCodes.slice(0, quantity);
-      const isManual = product.type === "Manual";
-      const remainingCodes = isManual
+      const remainingCodes = (isManual || isApiFulfillment)
         ? product.availableCodes
         : product.availableCodes.slice(quantity);
-      const orderStatus = isManual ? "billed" : "completed";
+      const orderStatus = isApiFulfillment ? "pending" : (isManual ? "billed" : "completed");
       const now = new Date().toISOString();
       const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-      if (product.type === "Manual") {
+      if (isManual || isApiFulfillment) {
         await catalogsDB.collection<Product>("Products").updateOne(
           { productId: deposit.productId },
           {
@@ -365,7 +382,7 @@ router.post("/webhook/deposit", async (req, res) => {
         userId: deposit.sellerId,
         id: sellerTransactionId,
         type: "SoldCodes",
-        status: isManual ? "billed" : "pending",
+        status: (isManual || isApiFulfillment) ? "billed" : "pending",
         method: "balance",
         amount: deposit.amount,
         createdAt: now,
@@ -401,7 +418,32 @@ router.post("/webhook/deposit", async (req, res) => {
 
       await walletsDB.collection<Order>("Orders").insertOne(order);
 
-      if (!isManual) {
+      if (isApiFulfillment) {
+        const callbackStore = updatedStore || await catalogsDB.collection<Store>("Stores").findOne({ storeId: deposit.storeId });
+
+        if (!callbackStore) {
+          console.error(`API fulfillment callback skipped for order ${order.orderId}: store not found`);
+        } else {
+          const callbackResult = await dispatchApiOrderCallback(product, callbackStore, {
+            orderId: order.orderId,
+            productId: product.productId,
+            storeId: callbackStore.storeId,
+            quantity,
+            amount: deposit.amount,
+            fee: deposit.fee,
+            totalAmount: deposit.totalCharged,
+            datainput: deposit.datainput ?? null,
+            requestedAt: now,
+            source: "guest",
+          });
+
+          if (!callbackResult.success) {
+            console.error(`API fulfillment callback failed for order ${order.orderId}:`, callbackResult.error || callbackResult.status);
+          }
+        }
+      }
+
+      if (!isManual && !isApiFulfillment) {
         const seller = await db.collection<User>("users").findOne({ id: deposit.sellerId });
 
         try {
@@ -472,7 +514,7 @@ router.post("/webhook/deposit", async (req, res) => {
           await smtpTransporter.sendMail({
             from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
             to: deposit.userId,
-            subject: "Guest Manual Order Pending",
+            subject: isApiFulfillment ? "Guest API Order Pending" : "Guest Manual Order Pending",
             html: manualPendingHtml,
           });
         } catch (error) {
@@ -486,7 +528,10 @@ router.post("/webhook/deposit", async (req, res) => {
         { $set: { status: "completed" } }
       );
 
-      res.status(200).json({ success: true, message: "Purchase completed" });
+      res.status(200).json({
+        success: true,
+        message: isApiFulfillment ? "Purchase received and sent for API fulfillment" : "Purchase completed",
+      });
     } else {
       await walletsDB.collection<Deposit>("Deposits").updateOne(
         { payId: txnid },

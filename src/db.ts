@@ -101,7 +101,17 @@ export async function connectDB(): Promise<Db> {
 
   // Backfill API metadata for existing products
   await catalogsDb.collection("Products").updateMany(
-    { isAPI: { $exists: false } },
+    {
+      $or: [
+        { isAPI: { $exists: false } },
+        { isAPI: null },
+        { isAPI: { $type: "string" } },
+        { isAPI: { $type: "int" } },
+        { isAPI: { $type: "long" } },
+        { isAPI: { $type: "double" } },
+        { isAPI: { $type: "decimal" } },
+      ],
+    },
     { $set: { isAPI: false } }
   );
 

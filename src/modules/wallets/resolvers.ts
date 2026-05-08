@@ -6,6 +6,11 @@ import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import { recordAuditEvent } from "../../audit.js";
 import { decryptCodeOrPlain } from "../../utils/codeCrypto.js";
+import {
+  dispatchApiOrderCallback,
+  isApiFulfillmentProduct,
+  resolveApiCallbackUrl,
+} from "../../utils/productFulfillment.js";
 import type { User, Balance, Deposit, Transaction, Order, Product, Store, Review, Dispute, DisputeMessage, RefundOffer, Blacklist, Withdrawal, NotificationState, NotificationConflictRead } from "../../types.js";
 import type { Context } from "../../index.js";
 
@@ -2825,6 +2830,17 @@ export const walletsMutations = {
       };
     }
 
+    const isApiFulfillment = isApiFulfillmentProduct(product);
+    if (isApiFulfillment && !resolveApiCallbackUrl(product)) {
+      return {
+        code: 400,
+        success: false,
+        message: "This API product is missing a valid callback URL",
+        order: null,
+        transaction: null,
+      };
+    }
+
     // Check store is active and approved
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
     if (!store || !store.isActive) {
@@ -2846,8 +2862,9 @@ export const walletsMutations = {
       return { code: 403, success: false, message: "You are blocked from purchasing from this store", order: null, transaction: null };
     }
 
-    if (product.availableCodes.length < quantity) {
-      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, order: null, transaction: null };
+    const availableStock = isApiFulfillment ? product.available : product.availableCodes.length;
+    if (availableStock < quantity) {
+      return { code: 400, success: false, message: `Only ${availableStock} slot(s) available`, order: null, transaction: null };
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
@@ -2860,8 +2877,8 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Insufficient balance", order: null, transaction: null };
     }
 
-    const purchasedCodes = product.availableCodes.slice(0, quantity);
-    const remainingCodes = product.availableCodes.slice(quantity);
+    const purchasedCodes = isApiFulfillment ? [] : product.availableCodes.slice(0, quantity);
+    const remainingCodes = isApiFulfillment ? product.availableCodes : product.availableCodes.slice(quantity);
 
     // Debit buyer (total including fee)
     await walletsDB.collection<Balance>("Balances").updateOne(
@@ -2875,15 +2892,25 @@ export const walletsMutations = {
       { $inc: { suspendedBalance: amount } }
     );
 
-    // Update product: move codes from available to sold, update counts
-    await catalogsDB.collection<Product>("Products").updateOne(
-      { productId },
-      {
-        $set: { availableCodes: remainingCodes },
-        $push: { soldCodes: { $each: purchasedCodes } },
-        $inc: { available: -quantity, sold: quantity },
-      }
-    );
+    if (isApiFulfillment) {
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId },
+        {
+          $inc: { available: -quantity, sold: quantity },
+          $set: { isActive: (product.available - quantity) > 0 },
+        }
+      );
+    } else {
+      // Update product: move codes from available to sold, update counts
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId },
+        {
+          $set: { availableCodes: remainingCodes },
+          $push: { soldCodes: { $each: purchasedCodes } },
+          $inc: { available: -quantity, sold: quantity },
+        }
+      );
+    }
 
     // Update store total sales
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
@@ -2910,7 +2937,7 @@ export const walletsMutations = {
       userId,
       id: transactionId,
       type: "ProductPurchase",
-      status: "completed",
+      status: isApiFulfillment ? "billed" : "completed",
       method: "balance",
       amount: totalAmount,
       createdAt: now,
@@ -2925,7 +2952,7 @@ export const walletsMutations = {
       userId: product.userId,
       id: sellerTransactionId,
       type: "SoldCodes",
-      status: "pending",
+      status: isApiFulfillment ? "billed" : "pending",
       method: "balance",
       amount,
       createdAt: now,
@@ -2950,7 +2977,7 @@ export const walletsMutations = {
       amount,
       fee,
       totalAmount,
-      status: "completed",
+      status: isApiFulfillment ? "pending" : "completed",
       type: "userpurchase",
       isReviewed: false,
       reviewType: null,
@@ -2962,56 +2989,118 @@ export const walletsMutations = {
 
     await walletsDB.collection<Order>("Orders").insertOne(order);
 
+    if (isApiFulfillment) {
+      const callbackResult = await dispatchApiOrderCallback(product, store, {
+        orderId,
+        productId: product.productId,
+        storeId: store.storeId,
+        quantity,
+        amount,
+        fee,
+        totalAmount,
+        datainput: null,
+        requestedAt: now,
+        source: "user",
+      });
+
+      if (!callbackResult.success) {
+        console.error(`API fulfillment callback failed for order ${orderId}:`, callbackResult.error || callbackResult.status);
+      }
+    }
+
     const seller = await db.collection<User>("users").findOne({ id: product.userId });
 
     try {
       const mailTasks: Array<Promise<unknown>> = [];
 
       if (seller && shouldSendEmailForUser(seller)) {
-        const sellerHtml = renderStoreCodeSoldEmail(seller, {
-          storeName: updatedStore?.storeName || store?.storeName || "Your Store",
-          orderId,
-          productName: product.name,
-          quantity,
-          soldOn: now,
-          buyerTag: user.username,
-          grossAmount: amount,
-          platformFee: fee,
-          netEarnings: amount,
-          payoutTimeline: "Funds release in up to 24 hours",
-        });
+        if (isApiFulfillment) {
+          const sellerHtml = renderStoreManualPendingOrderEmail(seller.username, {
+            storeName: updatedStore?.storeName || store?.storeName || "Your Store",
+            orderId,
+            productName: product.name,
+            quantity,
+            buyerTag: user.username,
+            requestedOn: now,
+            orderAmount: totalAmount,
+            fulfillmentWindow: "24 hours",
+          });
 
-        mailTasks.push(
-          smtpTransporter.sendMail({
-            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
-            to: seller.email,
-            subject: "Code Sold - New Store Order",
-            html: sellerHtml,
-          })
-        );
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: seller.email,
+              subject: "New API Order Pending",
+              html: sellerHtml,
+            })
+          );
+        } else {
+          const sellerHtml = renderStoreCodeSoldEmail(seller, {
+            storeName: updatedStore?.storeName || store?.storeName || "Your Store",
+            orderId,
+            productName: product.name,
+            quantity,
+            soldOn: now,
+            buyerTag: user.username,
+            grossAmount: amount,
+            platformFee: fee,
+            netEarnings: amount,
+            payoutTimeline: "Funds release in up to 24 hours",
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: seller.email,
+              subject: "Code Sold - New Store Order",
+              html: sellerHtml,
+            })
+          );
+        }
       }
 
       if (shouldSendEmailForUser(user)) {
-        const buyerHtml = renderOrderSummaryEmail(user.username, {
-          orderId,
-          orderDate: now,
-          paymentMethod: "Wallet Balance",
-          orderStatus: "Completed",
-          productName: product.name,
-          quantity,
-          amount,
-          fee,
-          totalAmount,
-        });
+        if (isApiFulfillment) {
+          const buyerHtml = renderBuyerManualPendingOrderEmail(user.username, {
+            orderId,
+            storeName: updatedStore?.storeName || store?.storeName || "Store",
+            placedOn: now,
+            productName: product.name,
+            quantity,
+            orderAmount: totalAmount,
+            expectedFulfillmentTime: "Within 24 hours",
+          });
 
-        mailTasks.push(
-          smtpTransporter.sendMail({
-            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
-            to: user.email,
-            subject: "Your Order Summary",
-            html: buyerHtml,
-          })
-        );
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: user.email,
+              subject: "Order Pending Fulfillment",
+              html: buyerHtml,
+            })
+          );
+        } else {
+          const buyerHtml = renderOrderSummaryEmail(user.username, {
+            orderId,
+            orderDate: now,
+            paymentMethod: "Wallet Balance",
+            orderStatus: "Completed",
+            productName: product.name,
+            quantity,
+            amount,
+            fee,
+            totalAmount,
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: user.email,
+              subject: "Your Order Summary",
+              html: buyerHtml,
+            })
+          );
+        }
       }
 
       await Promise.allSettled(mailTasks);
@@ -3022,7 +3111,7 @@ export const walletsMutations = {
     return {
       code: 200,
       success: true,
-      message: "Purchase successful",
+      message: isApiFulfillment ? "Order sent for API fulfillment" : "Purchase successful",
       user,
       order: {
         orderId: order.orderId,
@@ -3164,6 +3253,17 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "This mutation only supports Manual products", order: null, transaction: null };
     }
 
+    const isApiFulfillment = isApiFulfillmentProduct(product);
+    if (isApiFulfillment && !resolveApiCallbackUrl(product)) {
+      return {
+        code: 400,
+        success: false,
+        message: "This API product is missing a valid callback URL",
+        order: null,
+        transaction: null,
+      };
+    }
+
     if (!product.isActive) {
       return { code: 400, success: false, message: "Product is not available", order: null, transaction: null };
     }
@@ -3277,7 +3377,7 @@ export const walletsMutations = {
       amount,
       fee,
       totalAmount,
-      status: "billed",
+      status: isApiFulfillment ? "pending" : "billed",
       type: "userpurchase",
       isReviewed: false,
       reviewType: null,
@@ -3289,6 +3389,25 @@ export const walletsMutations = {
     };
 
     await walletsDB.collection<Order>("Orders").insertOne(order);
+
+    if (isApiFulfillment) {
+      const callbackResult = await dispatchApiOrderCallback(product, store, {
+        orderId,
+        productId: product.productId,
+        storeId: store.storeId,
+        quantity,
+        amount,
+        fee,
+        totalAmount,
+        datainput: cleanDataInput.length ? cleanDataInput : null,
+        requestedAt: now,
+        source: "user",
+      });
+
+      if (!callbackResult.success) {
+        console.error(`API fulfillment callback failed for order ${orderId}:`, callbackResult.error || callbackResult.status);
+      }
+    }
 
     const seller = await db.collection<User>("users").findOne({ id: product.userId });
 
@@ -3347,7 +3466,7 @@ export const walletsMutations = {
     return {
       code: 200,
       success: true,
-      message: "Manual order purchase successful",
+      message: isApiFulfillment ? "Manual API order sent for fulfillment" : "Manual order purchase successful",
       user,
       order: {
         orderId: order.orderId,
@@ -3481,6 +3600,11 @@ export const walletsMutations = {
       };
     }
 
+    const isApiFulfillment = isApiFulfillmentProduct(product);
+    if (isApiFulfillment && !resolveApiCallbackUrl(product)) {
+      return { code: 400, success: false, message: "This API product is missing a valid callback URL", ...errorResponse };
+    }
+
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
     if (!store || !store.isActive) {
       return { code: 400, success: false, message: "This store is currently unavailable", ...errorResponse };
@@ -3490,8 +3614,9 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "This store is not approved", ...errorResponse };
     }
 
-    if (product.availableCodes.length < quantity) {
-      return { code: 400, success: false, message: `Only ${product.availableCodes.length} code(s) available`, ...errorResponse };
+    const availableStock = isApiFulfillment ? product.available : product.availableCodes.length;
+    if (availableStock < quantity) {
+      return { code: 400, success: false, message: `Only ${availableStock} slot(s) available`, ...errorResponse };
     }
 
     const amount = parseFloat((product.price * quantity).toFixed(2));
@@ -3672,6 +3797,11 @@ export const walletsMutations = {
         message: "This mutation only supports Manual products",
         ...errorResponse,
       };
+    }
+
+    const isApiFulfillment = isApiFulfillmentProduct(product);
+    if (isApiFulfillment && !resolveApiCallbackUrl(product)) {
+      return { code: 400, success: false, message: "This API product is missing a valid callback URL", ...errorResponse };
     }
 
     if (!product.isActive) {
