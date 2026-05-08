@@ -124,6 +124,49 @@ const shouldSendEmailForUser = (user: User): boolean => {
   return (user.deliveryOption || "email") === "email";
 };
 
+const normalizeImgbbImageInput = (input: string): { image: string; error: string | null } => {
+  const raw = input.trim();
+  if (!raw) {
+    return { image: "", error: "Image is required" };
+  }
+
+  if (/^blob:/i.test(raw)) {
+    return {
+      image: "",
+      error: "Blob URLs are not supported. Send a base64 image string or public image URL",
+    };
+  }
+
+  const dataUriMatch = raw.match(/^data:([^;]+);base64,(.+)$/i);
+  if (dataUriMatch) {
+    const mimeType = dataUriMatch[1].toLowerCase();
+    if (!mimeType.startsWith("image/")) {
+      return { image: "", error: "Only image files are allowed" };
+    }
+
+    const base64Payload = dataUriMatch[2].replace(/\s+/g, "");
+    if (!base64Payload) {
+      return { image: "", error: "Image is required" };
+    }
+
+    return { image: base64Payload, error: null };
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    return { image: raw, error: null };
+  }
+
+  const base64Payload = raw.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=]+$/.test(base64Payload)) {
+    return {
+      image: "",
+      error: "Invalid image payload. Send base64 image data or an https image URL",
+    };
+  }
+
+  return { image: base64Payload, error: null };
+};
+
 function validateBase64Image(base64: string, fieldName: string): void {
   // Strip data URI prefix if present
   const raw = base64.replace(/^data:image\/\w+;base64,/, "");
@@ -2891,10 +2934,15 @@ export const catalogsMutations = {
       return { code: 500, success: false, message: "Image upload not configured", url: null, deleteUrl: null };
     }
 
+    const normalizedImageInput = normalizeImgbbImageInput(image);
+    if (normalizedImageInput.error) {
+      return { code: 400, success: false, message: normalizedImageInput.error, url: null, deleteUrl: null };
+    }
+
     try {
       const formData = new URLSearchParams();
       formData.append("key", apiKey);
-      formData.append("image", image);
+      formData.append("image", normalizedImageInput.image);
 
       const response = await fetch("https://api.imgbb.com/1/upload", {
         method: "POST",
@@ -2904,7 +2952,12 @@ export const catalogsMutations = {
       const data = await response.json() as { success: boolean; data?: { url: string; delete_url: string }; error?: { message: string } };
 
       if (!data.success) {
-        return { code: 400, success: false, message: data.error?.message || "Image upload failed", url: null, deleteUrl: null };
+        const uploadError = data.error?.message || "Image upload failed";
+        const message = /unsupported or unrecognized file format/i.test(uploadError)
+          ? "Unsupported image format. Upload JPEG, PNG, GIF, or WebP as base64 or image URL"
+          : uploadError;
+
+        return { code: 400, success: false, message, url: null, deleteUrl: null };
       }
 
       return {
