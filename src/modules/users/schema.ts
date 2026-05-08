@@ -35,14 +35,67 @@ export const usersTypeDefs = `#graphql
     user: User
   }
 
+  type MerchantFundsStatus {
+    lockAmount: Float!
+    lockedAt: String
+    unlocksAt: String
+    canUnfreeze: Boolean!
+  }
+
+  type MerchantActionResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    store: StoreDetails
+    wallet: Wallet
+    merchantFunds: MerchantFundsStatus
+    pendingOrders: Int
+  }
+
+  type MerchantCredentials {
+    apiKey: String
+    secret: String
+  }
+
+  type GetMerchantDetailsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    store: StoreDetails
+    wallet: Wallet
+    merchantFunds: MerchantFundsStatus
+    merchantCredentials: MerchantCredentials
+    pendingOrders: Int
+  }
+
+  input UpdateMerchantDetailsInput {
+    regenerateApiKey: Boolean
+    regenerateSecret: Boolean
+  }
+
+  type UpdateMerchantDetailsResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    store: StoreDetails
+    merchantCredentials: MerchantCredentials
+  }
+
   extend type Query {
     getUserDetails: UserDetailsResponse!
     getUserStoreDetails: GetStoreDetailsResponse!
     getPremium: GetPremiumResponse!
+    getMerchantDetails: GetMerchantDetailsResponse!
   }
 
   extend type Mutation {
     buyPremium: GetPremiumResponse!
     updateDeliveryOption(option: DeliveryOption!): UpdateDeliveryOptionResponse!
+    UpdateMerchantdetails(input: UpdateMerchantDetailsInput!): UpdateMerchantDetailsResponse!
+    becomeMerchant: MerchantActionResponse!
+    UnfreezeMerchantfunds: MerchantActionResponse!
   }
 `;

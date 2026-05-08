@@ -22,6 +22,40 @@ export async function connectDB(): Promise<Db> {
   await db.collection("AuditLogs").createIndex({ eventName: 1, createdAt: -1 });
   await db.collection("AuditLogs").createIndex({ actorId: 1, createdAt: -1 });
   await db.collection("AuditLogs").createIndex({ targetId: 1, createdAt: -1 });
+  const storesCollection = catalogsDb.collection("Stores");
+  const expectedMerchantApiKeyFilter = { merchantApiKey: { $type: "string" } };
+  const storeIndexes = await storesCollection.indexes();
+  const merchantApiKeyIndex = storeIndexes.find((index) => index.key?.merchantApiKey === 1);
+
+  const hasExpectedMerchantApiKeyIndex = Boolean(
+    merchantApiKeyIndex
+      && merchantApiKeyIndex.unique === true
+      && JSON.stringify(merchantApiKeyIndex.partialFilterExpression ?? null) === JSON.stringify(expectedMerchantApiKeyFilter)
+  );
+
+  if (
+    merchantApiKeyIndex
+    && typeof merchantApiKeyIndex.name === "string"
+    && !hasExpectedMerchantApiKeyIndex
+  ) {
+    await storesCollection.dropIndex(merchantApiKeyIndex.name);
+  }
+
+  if (!hasExpectedMerchantApiKeyIndex) {
+    await storesCollection.createIndex(
+      { merchantApiKey: 1 },
+      { unique: true, partialFilterExpression: expectedMerchantApiKeyFilter }
+    );
+  }
+
+  await catalogsDb.collection("MerchantRequestNonces").createIndex(
+    { storeId: 1, nonce: 1 },
+    { unique: true, name: "merchant_nonce_unique_idx" }
+  );
+  await catalogsDb.collection("MerchantRequestNonces").createIndex(
+    { expiresAt: 1 },
+    { expireAfterSeconds: 0, name: "merchant_nonce_ttl_idx" }
+  );
 
   console.log("✅ Connected to MongoDB");
 

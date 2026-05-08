@@ -196,6 +196,17 @@ export interface Store {
   reviews: Review[];
   createdAt: string;
   requestCount: number;
+  merchantLockedAmount?: number;
+  merchantLockedAt?: string | null;
+  merchantApiKey?: string | null;
+  merchantSecret?: string | null;
+}
+
+export interface MerchantRequestNonce {
+  storeId: string;
+  nonce: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface PromotedStore {

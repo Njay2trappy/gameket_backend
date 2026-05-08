@@ -11,6 +11,7 @@ import { resolvers } from "./resolvers.js";
 import { connectDB, closeDB, getDB, getWalletsDB } from "./db.js";
 import type { Account, User } from "./types.js";
 import depositRouter from "./rest/deposit.js";
+import merchantRouter from "./rest/merchant.js";
 import { startCronJobs } from "./cron.js";
 import { attachRequestId, getRequestId, logger } from "./logger.js";
 
@@ -42,6 +43,7 @@ async function main() {
   app.use(attachRequestId);
   app.use(express.json());
   app.use(depositRouter);
+  app.use(merchantRouter);
 
   app.use(
     "/",

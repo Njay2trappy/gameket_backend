@@ -132,7 +132,7 @@ export function startCronJobs() {
         );
 
         await catalogsDB.collection<Store>("Stores").updateOne(
-          { userId: premium.userId },
+          { userId: premium.userId, type: "premium" },
           { $set: { type: "basic" } }
         );
       }
