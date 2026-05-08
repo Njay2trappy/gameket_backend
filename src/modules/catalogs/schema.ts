@@ -112,6 +112,15 @@ export const catalogsTypeDefs = `#graphql
     products: ProductConnection
   }
 
+  type GetUserProductCallbackurlResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    product: ProductDetails
+    callbackurl: String
+  }
+
   type CodeEdge {
     cursor: String!
     node: String!
@@ -284,6 +293,7 @@ export const catalogsTypeDefs = `#graphql
   extend type Query {
     fetchCatalog(name: String!, category: String, first: Int, after: String, last: Int, before: String): FetchCatalogResponse!
     getUserProducts(productId: ID, first: Int, after: String, last: Int, before: String): GetUserProductsResponse!
+    getUserProductCallbackurl(productId: ID!): GetUserProductCallbackurlResponse!
     getUserAdvertisableProducts(first: Int, after: String, last: Int, before: String): GetUserAdvertisableProductsResponse!
     viewProductCodes(productId: ID!, first: Int, after: String, last: Int, before: String): ViewProductCodesResponse!
     checkProductADPosition(productId: ID!, amount: Float!): CheckProductADPositionResponse!
@@ -390,6 +400,20 @@ export const catalogsTypeDefs = `#graphql
     message: String!
     user: User
     available: Int
+    product: ProductDetails
+  }
+
+  input UpdateProductCallbackurlInput {
+    productId: ID!
+    callbackurl: String!
+  }
+
+  type UpdateProductCallbackurlResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    callbackurl: String
     product: ProductDetails
   }
 
@@ -605,6 +629,7 @@ export const catalogsTypeDefs = `#graphql
     addProductcodesbyAPI(input: AddProductCodesbyAPIInput!): AddProductCodesResponse!
     addProductManualcodes(input: AddProductManualcodesInput!): AddProductManualcodesResponse!
     addProductManualcodesbyAPI(input: AddProductManualcodesbyAPIInput!): AddProductManualcodesResponse!
+    updateProductCallbackurl(input: UpdateProductCallbackurlInput!): UpdateProductCallbackurlResponse!
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
     deleteProductManualcodes(input: DeleteProductManualcodesInput!): DeleteProductManualcodesResponse!
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!

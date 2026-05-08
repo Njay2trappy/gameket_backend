@@ -377,6 +377,57 @@ export const catalogsQueries = {
     };
   },
 
+  getUserProductCallbackurl: async (
+    _: unknown,
+    { productId }: { productId: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return {
+        code: 403,
+        success: false,
+        message: "Only sellers can view product callback URLs",
+        user: null,
+        product: null,
+        callbackurl: null,
+      };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return {
+        code: 404,
+        success: false,
+        message: "Product not found or does not belong to you",
+        user,
+        product: null,
+        callbackurl: null,
+      };
+    }
+
+    return {
+      code: 200,
+      success: true,
+      message: product.apiCallbackUrl
+        ? "Product callback URL retrieved successfully"
+        : "No callback URL configured for this product",
+      user,
+      product: mapProductDetails(product),
+      callbackurl: product.apiCallbackUrl || null,
+    };
+  },
+
   viewProductCodes: async (
     _: unknown,
     { productId, first, after, last, before }: { productId: string; first?: number; after?: string; last?: number; before?: string },
@@ -2143,6 +2194,91 @@ export const catalogsMutations = {
       message: `Manual API stock set to fixed quantity (${quantity}) successfully`,
       user,
       available: (updated?.available ?? quantity),
+      product: updated ? mapProductDetails(updated) : null,
+    };
+  },
+
+  updateProductCallbackurl: async (
+    _: unknown,
+    { input }: { input: { productId: string; callbackurl: string } },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const userId = context.user.userId;
+    const { productId } = input;
+
+    const callbackUrl = validateApiCallbackUrl(input.callbackurl || "");
+    if (!callbackUrl) {
+      return {
+        code: 400,
+        success: false,
+        message: "callbackurl must be a valid http or https URL",
+        user: null,
+        callbackurl: null,
+        product: null,
+      };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return {
+        code: 403,
+        success: false,
+        message: "Only sellers can update product callback URLs",
+        user: null,
+        callbackurl: null,
+        product: null,
+      };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return {
+        code: 404,
+        success: false,
+        message: "Product not found or does not belong to you",
+        user,
+        callbackurl: null,
+        product: null,
+      };
+    }
+
+    if (!product.isAPI) {
+      return {
+        code: 400,
+        success: false,
+        message: "This product is not configured as API. Use addProductcodesbyAPI or addProductManualcodesbyAPI first",
+        user,
+        callbackurl: null,
+        product: mapProductDetails(product),
+      };
+    }
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      {
+        $set: {
+          apiCallbackUrl: callbackUrl,
+        },
+      }
+    );
+
+    const updated = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: "Product callback URL updated successfully",
+      user,
+      callbackurl: updated?.apiCallbackUrl || callbackUrl,
       product: updated ? mapProductDetails(updated) : null,
     };
   },
