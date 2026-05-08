@@ -350,7 +350,6 @@ export const catalogsTypeDefs = `#graphql
 
   input AddProductCodesbyAPIInput {
     productId: ID!
-    quantity: Int!
     callbackurl: String!
   }
 
@@ -371,7 +370,6 @@ export const catalogsTypeDefs = `#graphql
 
   input AddProductManualcodesbyAPIInput {
     productId: ID!
-    quantity: Int!
     isadditional: Boolean!
     characterCount: Int
     orderDescription: String

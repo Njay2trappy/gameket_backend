@@ -2841,6 +2841,16 @@ export const walletsMutations = {
       };
     }
 
+    if (isApiFulfillment && quantity > 10) {
+      return {
+        code: 400,
+        success: false,
+        message: "API products allow a maximum quantity of 10 per purchase",
+        order: null,
+        transaction: null,
+      };
+    }
+
     // Check store is active and approved
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
     if (!store || !store.isActive) {
@@ -3264,6 +3274,16 @@ export const walletsMutations = {
       };
     }
 
+    if (isApiFulfillment && quantity > 10) {
+      return {
+        code: 400,
+        success: false,
+        message: "API products allow a maximum quantity of 10 per purchase",
+        order: null,
+        transaction: null,
+      };
+    }
+
     if (!product.isActive) {
       return { code: 400, success: false, message: "Product is not available", order: null, transaction: null };
     }
@@ -3570,10 +3590,6 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Quantity must be a positive integer", ...errorResponse };
     }
 
-    if (quantity > 2) {
-      return { code: 400, success: false, message: "Maximum quantity is 2", ...errorResponse };
-    }
-
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return { code: 400, success: false, message: "Invalid email address", ...errorResponse };
@@ -3603,6 +3619,16 @@ export const walletsMutations = {
     const isApiFulfillment = isApiFulfillmentProduct(product);
     if (isApiFulfillment && !resolveApiCallbackUrl(product)) {
       return { code: 400, success: false, message: "This API product is missing a valid callback URL", ...errorResponse };
+    }
+
+    const maxQuantity = isApiFulfillment ? 10 : 2;
+    if (quantity > maxQuantity) {
+      return {
+        code: 400,
+        success: false,
+        message: `Maximum quantity is ${maxQuantity}`,
+        ...errorResponse,
+      };
     }
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: product.storeId });
@@ -3768,10 +3794,6 @@ export const walletsMutations = {
       return { code: 400, success: false, message: "Quantity must be a positive integer", ...errorResponse };
     }
 
-    if (quantity > 2) {
-      return { code: 400, success: false, message: "Maximum quantity is 2", ...errorResponse };
-    }
-
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return { code: 400, success: false, message: "Invalid email address", ...errorResponse };
@@ -3802,6 +3824,16 @@ export const walletsMutations = {
     const isApiFulfillment = isApiFulfillmentProduct(product);
     if (isApiFulfillment && !resolveApiCallbackUrl(product)) {
       return { code: 400, success: false, message: "This API product is missing a valid callback URL", ...errorResponse };
+    }
+
+    const maxQuantity = isApiFulfillment ? 10 : 2;
+    if (quantity > maxQuantity) {
+      return {
+        code: 400,
+        success: false,
+        message: `Maximum quantity is ${maxQuantity}`,
+        ...errorResponse,
+      };
     }
 
     if (!product.isActive) {

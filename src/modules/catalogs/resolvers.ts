@@ -46,6 +46,7 @@ const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
 const MAX_PRODUCT_DESCRIPTION_LENGTH = 3000;
 const MAX_MANUAL_ORDER_DESCRIPTION_LENGTH = 2000;
+const API_FIXED_STOCK_QUANTITY = 2584;
 const MANUAL_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const VALID_WORKING_DAYS: ProductManualWorkingDay["day"][] = [
   "MONDAY",
@@ -1769,7 +1770,7 @@ export const catalogsMutations = {
 
   addProductcodesbyAPI: async (
     _: unknown,
-    { input }: { input: { productId: string; quantity: number; callbackurl: string } },
+    { input }: { input: { productId: string; callbackurl: string } },
     context: Context
   ) => {
     if (!context.user) {
@@ -1779,11 +1780,8 @@ export const catalogsMutations = {
     }
 
     const userId = context.user.userId;
-    const { productId, quantity } = input;
-
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      return { code: 400, success: false, message: "Quantity must be a positive integer", available: null };
-    }
+    const { productId } = input;
+    const quantity = API_FIXED_STOCK_QUANTITY;
 
     const callbackUrl = validateApiCallbackUrl(input.callbackurl || "");
     if (!callbackUrl) {
@@ -2017,7 +2015,6 @@ export const catalogsMutations = {
     }: {
       input: {
         productId: string;
-        quantity: number;
         isadditional: boolean;
         characterCount?: number;
         orderDescription?: string;
@@ -2033,11 +2030,8 @@ export const catalogsMutations = {
     }
 
     const userId = context.user.userId;
-    const { productId, quantity, isadditional } = input;
-
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      return { code: 400, success: false, message: "Quantity must be a positive integer", user: null, available: null, product: null };
-    }
+    const { productId, isadditional } = input;
+    const quantity = API_FIXED_STOCK_QUANTITY;
 
     const callbackUrl = validateApiCallbackUrl(input.callbackurl || "");
     if (!callbackUrl) {
