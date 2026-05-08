@@ -2896,11 +2896,13 @@ export const walletsMutations = {
       { $inc: { availableBalance: -totalAmount } }
     );
 
-    // Credit store owner's suspended balance (released after 24hrs)
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: product.userId },
-      { $inc: { suspendedBalance: amount } }
-    );
+    // Do not credit seller balance for API-pending orders.
+    if (!isApiFulfillment) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: product.userId },
+        { $inc: { suspendedBalance: amount } }
+      );
+    }
 
     if (isApiFulfillment) {
       await catalogsDB.collection<Product>("Products").updateOne(
@@ -3324,10 +3326,12 @@ export const walletsMutations = {
       { $inc: { availableBalance: -totalAmount } }
     );
 
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: product.userId },
-      { $inc: { suspendedBalance: amount } }
-    );
+    if (!isApiFulfillment) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: product.userId },
+        { $inc: { suspendedBalance: amount } }
+      );
+    }
 
     if (isApiFulfillment) {
       await catalogsDB.collection<Product>("Products").updateOne(
@@ -4657,17 +4661,19 @@ export const walletsMutations = {
         { $inc: { availableBalance: refundAmount } }
       );
 
-      // Deduct seller from the correct balance depending on release status
+      // Pending orders are not credited to seller suspended balance.
       if (order.isReleased) {
         await walletsDB.collection<Balance>("Balances").updateOne(
           { userId: order.sellerId },
           { $inc: { availableBalance: -sellerDeduction } }
         );
-      } else {
+      } else if (order.status !== "pending") {
         await walletsDB.collection<Balance>("Balances").updateOne(
           { userId: order.sellerId },
           { $inc: { suspendedBalance: -sellerDeduction } }
         );
+      } else {
+        // No-op: pending orders have no seller credit yet.
       }
 
       // Decrement store totalSales and recalculate rank
@@ -5233,6 +5239,12 @@ export const walletsMutations = {
       await walletsDB.collection<Balance>("Balances").updateOne(
         { userId: offer.sellerId },
         { $inc: { availableBalance: -offer.sellerDeduction } }
+      );
+    } else if (order.status === "pending") {
+      // Pending orders have no seller suspended credit yet; only credit the final remaining payout.
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: offer.sellerId },
+        { $inc: { availableBalance: remainingAmount } }
       );
     } else {
       // Deduct full amount from suspended, release remaining to available immediately

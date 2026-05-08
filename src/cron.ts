@@ -30,7 +30,7 @@ export function startCronJobs() {
     try {
       const orders = await walletsDB
         .collection<Order>("Orders")
-        .find({ isReleased: false, status: { $in: ["completed", "pending"] }, releasedAt: { $lte: now } })
+        .find({ isReleased: false, status: "completed", releasedAt: { $lte: now } })
         .toArray();
 
       for (const order of orders) {
@@ -147,7 +147,7 @@ export function startCronJobs() {
     console.log("[CRON] Scheduled jobs complete.");
   });
 
-  // Run every hour — expire stale billed manual orders
+  // Run every hour — expire stale billed and pending orders
   cron.schedule("0 * * * *", async () => {
     const now = new Date().toISOString();
     const db = getDB();
@@ -253,6 +253,130 @@ export function startCronJobs() {
       }
     } catch (err) {
       console.error("[CRON] Error expiring stale billed orders:", err);
+    }
+
+    try {
+      const stalePendingOrders = await walletsDB
+        .collection<Order>("Orders")
+        .find({ status: "pending", createdAt: { $lte: expiryCutoff } })
+        .toArray();
+
+      for (const order of stalePendingOrders) {
+        const isAnonBuyer = order.buyerId === "anon-gameket-id";
+
+        // Refund registered buyer's wallet; guest refunds are manual
+        if (!isAnonBuyer) {
+          await walletsDB.collection<Balance>("Balances").updateOne(
+            { userId: order.buyerId },
+            { $inc: { availableBalance: order.totalAmount } }
+          );
+        }
+
+        // Mark both transactions as refunded
+        if (order.buyerTransactionId) {
+          await walletsDB.collection<Transaction>("Transactions").updateOne(
+            { id: order.buyerTransactionId },
+            { $set: { status: "refunded" } }
+          );
+        }
+
+        await walletsDB.collection<Transaction>("Transactions").updateOne(
+          { id: order.sellerTransactionId },
+          { $set: { status: "refunded" } }
+        );
+
+        // Create a Refund transaction for the buyer (registered only)
+        if (!isAnonBuyer) {
+          const refundTxnId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+          await walletsDB.collection<Transaction>("Transactions").insertOne({
+            userId: order.buyerId,
+            id: refundTxnId,
+            type: "Refund",
+            status: "completed",
+            method: "balance",
+            amount: order.totalAmount,
+            createdAt: now,
+          });
+        }
+
+        // Roll back product stock/sales impact
+        const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+        if (product) {
+          if (product.isAPI) {
+            await catalogsDB.collection<Product>("Products").updateOne(
+              { productId: order.productId },
+              {
+                $inc: { sold: -order.quantity },
+                $set: { isActive: true },
+              }
+            );
+          } else if (product.type === "Manual") {
+            await catalogsDB.collection<Product>("Products").updateOne(
+              { productId: order.productId },
+              {
+                $inc: { available: order.quantity, sold: -order.quantity },
+                $set: { isActive: true },
+              }
+            );
+          } else {
+            const codesToRestore = Array.isArray(order.codes) ? order.codes : [];
+
+            if (codesToRestore.length > 0) {
+              await catalogsDB.collection<Product>("Products").updateOne(
+                { productId: order.productId },
+                {
+                  $push: { availableCodes: { $each: codesToRestore } },
+                  $pull: { soldCodes: { $in: codesToRestore } },
+                  $inc: { available: order.quantity, sold: -order.quantity },
+                  $set: { isActive: true },
+                }
+              );
+            } else {
+              await catalogsDB.collection<Product>("Products").updateOne(
+                { productId: order.productId },
+                {
+                  $inc: { available: order.quantity, sold: -order.quantity },
+                  $set: { isActive: true },
+                }
+              );
+            }
+          }
+        }
+
+        // Roll back store totalSales and seller rank
+        const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+          { storeId: order.storeId },
+          { $inc: { totalSales: -order.quantity } },
+          { returnDocument: "after" }
+        );
+
+        if (updatedStore) {
+          const newRank = getRankFromSales(updatedStore.totalSales);
+          await db.collection<User>("users").updateOne(
+            { id: order.sellerId },
+            { $set: { rank: newRank } }
+          );
+        }
+
+        await walletsDB.collection<Order>("Orders").updateOne(
+          { orderId: order.orderId },
+          {
+            $set: {
+              status: "refunded",
+              isReleased: true,
+              declinedAt: now,
+              declineReason: "Order expired: pending for over 24 hours",
+              statusUpdatedAt: now,
+            },
+          }
+        );
+      }
+
+      if (stalePendingOrders.length > 0) {
+        console.log(`[CRON] Auto-refunded ${stalePendingOrders.length} expired pending order(s).`);
+      }
+    } catch (err) {
+      console.error("[CRON] Error expiring stale pending orders:", err);
     }
   });
 

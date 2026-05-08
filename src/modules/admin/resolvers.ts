@@ -2900,10 +2900,17 @@ export const adminMutations = {
     }
 
     if (!order.isReleased) {
-      await walletsDB.collection<Balance>("Balances").updateOne(
-        { userId: order.sellerId },
-        { $inc: { suspendedBalance: -order.amount, availableBalance: order.amount } }
-      );
+      if (order.status === "pending") {
+        await walletsDB.collection<Balance>("Balances").updateOne(
+          { userId: order.sellerId },
+          { $inc: { availableBalance: order.amount } }
+        );
+      } else {
+        await walletsDB.collection<Balance>("Balances").updateOne(
+          { userId: order.sellerId },
+          { $inc: { suspendedBalance: -order.amount, availableBalance: order.amount } }
+        );
+      }
 
       await walletsDB.collection<Transaction>("Transactions").updateOne(
         { id: order.sellerTransactionId },
@@ -3006,11 +3013,13 @@ export const adminMutations = {
         { userId: order.sellerId },
         { $inc: { availableBalance: -sellerDeduction } }
       );
-    } else {
+    } else if (order.status !== "pending") {
       await walletsDB.collection<Balance>("Balances").updateOne(
         { userId: order.sellerId },
         { $inc: { suspendedBalance: -sellerDeduction } }
       );
+    } else {
+      // No-op: pending orders have no seller credit yet.
     }
 
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(

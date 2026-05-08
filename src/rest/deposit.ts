@@ -377,11 +377,13 @@ router.post("/webhook/deposit", async (req, res) => {
         );
       }
 
-      // Credit seller's suspended balance
-      await walletsDB.collection<Balance>("Balances").updateOne(
-        { userId: deposit.sellerId },
-        { $inc: { suspendedBalance: deposit.amount } }
-      );
+      // Do not credit seller balance for API-pending orders.
+      if (!isApiFulfillment) {
+        await walletsDB.collection<Balance>("Balances").updateOne(
+          { userId: deposit.sellerId },
+          { $inc: { suspendedBalance: deposit.amount } }
+        );
+      }
 
       // Create seller transaction
       const sellerTransactionId = randomBytes(24).toString("base64").replace(/[+/=]/g, "");
