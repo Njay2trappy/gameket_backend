@@ -1819,8 +1819,8 @@ export const catalogsMutations = {
     await catalogsDB.collection<Product>("Products").updateOne(
       { productId, userId },
       {
-        $inc: { available: quantity },
         $set: {
+          available: quantity,
           isActive: true,
           isAPI: true,
           apiCallbackUrl: callbackUrl,
@@ -1833,9 +1833,9 @@ export const catalogsMutations = {
     return {
       code: 200,
       success: true,
-      message: `${quantity} API stock slot(s) added successfully`,
+      message: `API stock set to fixed quantity (${quantity}) successfully`,
       user,
-      available: (updated?.available ?? product.available + quantity),
+      available: (updated?.available ?? quantity),
     };
   },
 
@@ -2125,8 +2125,8 @@ export const catalogsMutations = {
     await catalogsDB.collection<Product>("Products").updateOne(
       { productId, userId },
       {
-        $inc: { available: quantity },
         $set: {
+          available: quantity,
           isActive: true,
           isAPI: true,
           apiCallbackUrl: callbackUrl,
@@ -2140,9 +2140,9 @@ export const catalogsMutations = {
     return {
       code: 200,
       success: true,
-      message: `${quantity} manual API order slot(s) added successfully`,
+      message: `Manual API stock set to fixed quantity (${quantity}) successfully`,
       user,
-      available: (updated?.available ?? product.available + quantity),
+      available: (updated?.available ?? quantity),
       product: updated ? mapProductDetails(updated) : null,
     };
   },

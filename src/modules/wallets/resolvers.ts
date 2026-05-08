@@ -2906,8 +2906,8 @@ export const walletsMutations = {
       await catalogsDB.collection<Product>("Products").updateOne(
         { productId },
         {
-          $inc: { available: -quantity, sold: quantity },
-          $set: { isActive: (product.available - quantity) > 0 },
+          $inc: { sold: quantity },
+          $set: { isActive: true },
         }
       );
     } else {
@@ -3142,7 +3142,7 @@ export const walletsMutations = {
           discount: product.discount,
           isActive: product.isActive,
           isPromoted: product.isPromoted,
-          available: product.available - quantity,
+          available: isApiFulfillment ? product.available : product.available - quantity,
           sold: product.sold + quantity,
           type: product.type,
           manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),
@@ -3329,13 +3329,23 @@ export const walletsMutations = {
       { $inc: { suspendedBalance: amount } }
     );
 
-    await catalogsDB.collection<Product>("Products").updateOne(
-      { productId },
-      {
-        $inc: { available: -quantity, sold: quantity },
-        $set: { isActive: (product.available - quantity) > 0 },
-      }
-    );
+    if (isApiFulfillment) {
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId },
+        {
+          $inc: { sold: quantity },
+          $set: { isActive: true },
+        }
+      );
+    } else {
+      await catalogsDB.collection<Product>("Products").updateOne(
+        { productId },
+        {
+          $inc: { available: -quantity, sold: quantity },
+          $set: { isActive: (product.available - quantity) > 0 },
+        }
+      );
+    }
 
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
       { storeId: product.storeId },
@@ -3507,7 +3517,7 @@ export const walletsMutations = {
           discount: product.discount,
           isActive: product.isActive,
           isPromoted: product.isPromoted,
-          available: product.available - quantity,
+          available: isApiFulfillment ? product.available : product.available - quantity,
           sold: product.sold + quantity,
           type: product.type,
           manualOrderConfig: mapManualOrderConfig(product.manualOrderConfig),

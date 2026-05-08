@@ -333,7 +333,15 @@ router.post("/webhook/deposit", async (req, res) => {
       const now = new Date().toISOString();
       const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-      if (isManual || isApiFulfillment) {
+      if (isApiFulfillment) {
+        await catalogsDB.collection<Product>("Products").updateOne(
+          { productId: deposit.productId },
+          {
+            $inc: { sold: quantity },
+            $set: { isActive: true },
+          }
+        );
+      } else if (isManual) {
         await catalogsDB.collection<Product>("Products").updateOne(
           { productId: deposit.productId },
           {
