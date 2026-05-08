@@ -454,6 +454,7 @@ function getTransactionBalanceDelta(txn: Transaction): number {
     case "PartialRefund":
       return txn.status === "completed" ? txn.amount : 0;
     case "PremiumSubscription":
+    case "MerchantUpgrade":
     case "ProductPromotion":
     case "StorePromotion":
       return txn.status === "completed" ? -txn.amount : 0;

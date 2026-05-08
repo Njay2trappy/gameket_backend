@@ -107,6 +107,24 @@ const renderPremiumSubscriptionEmail = (
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const renderStoreMerchantUpgradeEmail = (
+  user: User,
+  store: Store,
+  activatedOn: string
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "store-merchant-upgrade-email.html"), "utf-8");
+  const firstName = user.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(store.storeName))
+    .replace(/\{\{storeId\}\}/g, escapeHtml(store.storeId))
+    .replace(/\{\{activatedOn\}\}/g, escapeHtml(formatDateTime(activatedOn)))
+    .replace(/\{\{merchantTier\}\}/g, "Merchant")
+    .replace(/\{\{primaryCategory\}\}/g, "Digital Products")
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
 export const userFieldResolvers = {
   deliveryOption: (parent: Record<string, unknown>) => {
     const value = String(parent.deliveryOption || "email").toLowerCase();
@@ -907,8 +925,35 @@ export const usersMutations = {
       };
     }
 
+    const merchantUpgradeTransaction: Transaction = {
+      userId,
+      id: crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, ""),
+      type: "MerchantUpgrade",
+      status: "completed",
+      method: "balance",
+      amount: MERCHANT_LOCK_AMOUNT,
+      createdAt: lockedAt,
+    };
+
+    await walletsDB.collection<Transaction>("Transactions").insertOne(merchantUpgradeTransaction);
+
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOne({ userId });
     const updatedBalance = await walletsDB.collection<Balance>("Balances").findOne({ userId });
+
+    if (shouldSendEmailForUser(user) && updatedStore) {
+      try {
+        const html = renderStoreMerchantUpgradeEmail(user, updatedStore, lockedAt);
+
+        await smtpTransporter.sendMail({
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+          to: user.email,
+          subject: "Your Store Is Now a Merchant Store",
+          html,
+        });
+      } catch (error) {
+        console.error("Failed to send merchant upgrade email:", error);
+      }
+    }
 
     return {
       code: 200,

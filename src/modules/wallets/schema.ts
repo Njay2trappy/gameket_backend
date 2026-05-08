@@ -2,6 +2,7 @@ export const walletsTypeDefs = `#graphql
   enum TransactionType {
     Deposit
     PremiumSubscription
+    MerchantUpgrade
     ProductPromotion
     StorePromotion
     ProductPurchase
