@@ -96,6 +96,100 @@ const renderWithdrawalStatusUpdateEmail = (
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const renderOrderStatusUpdateEmail = (
+  firstName: string,
+  input: {
+    status: "disputed" | "cancelled" | "refunded";
+    orderId: string;
+    productName: string;
+    quantity: number;
+    orderAmount: number;
+    updatedOn: string;
+    statusReason?: string | null;
+    refundAmount?: number;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "order-status-update-email.html"), "utf-8");
+
+  const isDisputed = input.status === "disputed";
+  const isCancelled = input.status === "cancelled";
+  const isRefunded = input.status === "refunded";
+
+  template = renderIfBlock(template, "isDisputed", isDisputed);
+  template = renderIfBlock(template, "isCancelled", isCancelled);
+  template = renderIfBlock(template, "isRefunded", isRefunded);
+  template = renderIfBlock(template, "statusReason", Boolean((input.statusReason || "").trim()));
+
+  const statusHeadline = isDisputed
+    ? "Order Disputed"
+    : isCancelled
+      ? "Order Cancelled"
+      : "Order Refunded";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{statusHeadline\}\}/g, escapeHtml(statusHeadline))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{updatedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{statusReason\}\}/g, escapeHtml((input.statusReason || "").trim()))
+    .replace(/\{\{disputeUrl\}\}/g, escapeHtml(`https://shop.gameket.io/orders?id=${encodeURIComponent(input.orderId)}`))
+    .replace(/\{\{browseUrl\}\}/g, escapeHtml("https://shop.gameket.io"))
+    .replace(/\{\{transactionsUrl\}\}/g, escapeHtml("https://shop.gameket.io/dashboard/transactions"))
+    .replace(/\{\{refundAmount\}\}/g, escapeHtml(formatUsd(input.refundAmount ?? input.orderAmount)))
+    .replace(/\{\{refundedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{refundMethod\}\}/g, "Wallet Balance")
+    .replace(/\{\{refundReference\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const sendOrderStatusUpdateEmails = async (
+  db: ReturnType<typeof getDB>,
+  order: Order,
+  input: {
+    status: "disputed" | "cancelled" | "refunded";
+    updatedOn: string;
+    statusReason?: string | null;
+    refundAmount?: number;
+  }
+) => {
+  const [buyer, seller, product] = await Promise.all([
+    order.buyerId === "anon-gameket-id" ? null : db.collection<User>("users").findOne({ id: order.buyerId }),
+    db.collection<User>("users").findOne({ id: order.sellerId }),
+    getCatalogsDB().collection<Product>("Products").findOne({ productId: order.productId }),
+  ]);
+
+  const productName = product?.name || "Product";
+  const recipients: Array<{ username: string; email: string }> = [];
+  if (buyer) recipients.push({ username: buyer.username, email: buyer.email });
+  if (seller) recipients.push({ username: seller.username, email: seller.email });
+  if (!recipients.length) return;
+
+  await Promise.allSettled(
+    recipients.map((recipient) => {
+      const html = renderOrderStatusUpdateEmail(recipient.username, {
+        status: input.status,
+        orderId: order.orderId,
+        productName,
+        quantity: order.quantity,
+        orderAmount: order.totalAmount,
+        updatedOn: input.updatedOn,
+        statusReason: input.statusReason,
+        refundAmount: input.refundAmount,
+      });
+
+      return smtpTransporter.sendMail({
+        from: process.env.SMTP_EMAIL,
+        to: recipient.email,
+        subject: "Order Status Updated",
+        html,
+      });
+    })
+  );
+};
+
 const renderUserSuspendedEmail = (user: User, suspendedOn: string): string => {
   const template = readFileSync(join(process.cwd(), "src", "emails", "user-suspended-email.html"), "utf-8");
   const firstName = user.username.trim() || "there";
@@ -2797,6 +2891,17 @@ export const adminMutations = {
       { orderId: order.orderId },
       { $set: { status: "refunded", isReleased: true, statusUpdatedAt: now } }
     );
+
+    try {
+      await sendOrderStatusUpdateEmails(db, order, {
+        status: "refunded",
+        updatedOn: now,
+        statusReason: "Admin resolved dispute in favor of the buyer and issued a refund",
+        refundAmount,
+      });
+    } catch (error) {
+      console.error("Failed to send admin refund order status email:", error);
+    }
 
     await walletsDB.collection("RefundOffers").updateMany(
       { orderId: order.orderId, status: "pending" },

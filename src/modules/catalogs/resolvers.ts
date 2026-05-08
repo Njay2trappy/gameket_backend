@@ -24,6 +24,8 @@ import countryData from "../../../data/country.json";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 const smtpTransporter = nodemailer.createTransport({
   host: "gameket.io",
@@ -59,6 +61,63 @@ const ALLOWED_IMAGE_SIGNATURES: Record<string, string> = {
   iVBORw0KGgo: "image/png",
   R0lGODlh: "image/gif",
   UklGR: "image/webp",
+};
+
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const formatDateTime = (iso: string): string => {
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const renderIfBlock = (template: string, key: string, include: boolean): string => {
+  const blockRegex = new RegExp(`\\{\\{#if\\s+${key}\\}\\}([\\s\\S]*?)\\{\\{\\/if\\}\\}`, "g");
+  return template.replace(blockRegex, include ? "$1" : "");
+};
+
+const renderStoreStatusUpdateEmail = (
+  owner: User,
+  store: Store,
+  input: {
+    status: "verified" | "failed";
+    updatedOn: string;
+    verificationFeedback?: string;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "store-status-update-email.html"), "utf-8");
+
+  const isVerified = input.status === "verified";
+  const statusHeadline = isVerified ? "Store Verified" : "Verification Failed";
+  const storeStatus = isVerified ? "Verified" : "Verification Failed";
+  const statusPillClass = isVerified ? "status-pill--verified" : "status-pill--failed";
+  const verificationFeedback = (input.verificationFeedback || "Your verification details could not be approved. Please review and resubmit.").trim();
+
+  template = renderIfBlock(template, "isVerified", isVerified);
+  template = renderIfBlock(template, "isVerificationFailed", !isVerified);
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(owner.username.trim() || "there"))
+    .replace(/\{\{statusHeadline\}\}/g, escapeHtml(statusHeadline))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(store.storeName))
+    .replace(/\{\{storeStatus\}\}/g, escapeHtml(storeStatus))
+    .replace(/\{\{statusPillClass\}\}/g, statusPillClass)
+    .replace(/\{\{storeId\}\}/g, escapeHtml(store.storeId))
+    .replace(/\{\{updatedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{dashboardUrl\}\}/g, escapeHtml("https://shop.gameket.io/dashboard"))
+    .replace(/\{\{resubmitUrl\}\}/g, escapeHtml("https://shop.gameket.io/user/store"))
+    .replace(/\{\{verificationFeedback\}\}/g, escapeHtml(verificationFeedback))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
 function validateBase64Image(base64: string, fieldName: string): void {
@@ -2694,6 +2753,25 @@ export const catalogsMutations = {
       { $set: { isApproved: true, approveStatus: "success" } }
     );
 
+    const owner = await db.collection<User>("users").findOne({ id: store.userId });
+    if (owner) {
+      try {
+        const html = renderStoreStatusUpdateEmail(owner, { ...store, isApproved: true, approveStatus: "success" }, {
+          status: "verified",
+          updatedOn: new Date().toISOString(),
+        });
+
+        await smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: owner.email,
+          subject: "Store Status Updated",
+          html,
+        });
+      } catch (emailError) {
+        console.error("Failed to send store approval email:", emailError);
+      }
+    }
+
     return { code: 200, success: true, message: "Store authorized successfully" };
   },
 
@@ -2767,6 +2845,25 @@ export const catalogsMutations = {
       { storeId },
       { $set: { approveStatus: "failed" } }
     );
+
+    const owner = await db.collection<User>("users").findOne({ id: store.userId });
+    if (owner) {
+      try {
+        const html = renderStoreStatusUpdateEmail(owner, { ...store, approveStatus: "failed" }, {
+          status: "failed",
+          updatedOn: new Date().toISOString(),
+        });
+
+        await smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: owner.email,
+          subject: "Store Status Updated",
+          html,
+        });
+      } catch (emailError) {
+        console.error("Failed to send store rejection email:", emailError);
+      }
+    }
 
     // Delete the verification doc so user can resubmit with new data
     await db.collection<VerificationRequest>("Verification").deleteOne({ storeId });

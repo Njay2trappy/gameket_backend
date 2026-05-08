@@ -157,6 +157,34 @@ const renderGuestAutomaticOrderEmail = (
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const renderGuestManualOrderEmail = (
+  input: {
+    orderId: string;
+    placedOn: string;
+    expectedFulfillmentTime: string;
+    productName: string;
+    quantity: number;
+    orderTotal: number;
+    paymentMethod: string;
+    storeName: string;
+    guestEmail: string;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "guest-manual-order-email.html"), "utf-8");
+
+  return template
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{placedOn\}\}/g, escapeHtml(formatDateTime(input.placedOn)))
+    .replace(/\{\{expectedFulfillmentTime\}\}/g, escapeHtml(input.expectedFulfillmentTime))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderTotal\}\}/g, escapeHtml(formatUsd(input.orderTotal)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{guestEmail\}\}/g, escapeHtml(input.guestEmail))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
 router.post("/webhook/deposit", async (req, res) => {
   const { txnid, status, amount, network, createdAt, privateKey } = req.body;
 
@@ -426,6 +454,29 @@ router.post("/webhook/deposit", async (req, res) => {
           await Promise.allSettled(mailTasks);
         } catch (error) {
           console.error("Failed to send order notification emails:", error);
+        }
+      } else {
+        try {
+          const manualPendingHtml = renderGuestManualOrderEmail({
+            orderId: deposit.orderId,
+            placedOn: now,
+            expectedFulfillmentTime: "Within 24 hours",
+            productName: product.name,
+            quantity,
+            orderTotal: deposit.totalCharged,
+            paymentMethod: deposit.paymentMethod || "Webcheckout",
+            storeName: updatedStore?.storeName || "Store",
+            guestEmail: deposit.userId,
+          });
+
+          await smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: deposit.userId,
+            subject: "Guest Manual Order Pending",
+            html: manualPendingHtml,
+          });
+        } catch (error) {
+          console.error("Failed to send guest manual order email:", error);
         }
       }
 

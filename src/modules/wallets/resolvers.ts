@@ -138,6 +138,239 @@ const renderOrderSummaryEmail = (
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const renderBuyerManualPendingOrderEmail = (
+  buyerName: string,
+  input: {
+    orderId: string;
+    storeName: string;
+    placedOn: string;
+    productName: string;
+    quantity: number;
+    orderAmount: number;
+    expectedFulfillmentTime: string;
+    buyerNote?: string | null;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "buyer-manual-pending-order-email.html"), "utf-8");
+  const firstName = buyerName.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{placedOn\}\}/g, escapeHtml(formatDateTime(input.placedOn)))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{expectedFulfillmentTime\}\}/g, escapeHtml(input.expectedFulfillmentTime))
+    .replace(/\{\{buyerNote\}\}/g, escapeHtml((input.buyerNote || "").trim() || "No additional note provided."))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderStoreManualPendingOrderEmail = (
+  sellerName: string,
+  input: {
+    storeName: string;
+    orderId: string;
+    productName: string;
+    quantity: number;
+    buyerTag: string;
+    requestedOn: string;
+    orderAmount: number;
+    fulfillmentWindow: string;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "store-manual-pending-order-email.html"), "utf-8");
+  const firstName = sellerName.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{buyerTag\}\}/g, escapeHtml(input.buyerTag))
+    .replace(/\{\{requestedOn\}\}/g, escapeHtml(formatDateTime(input.requestedOn)))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{fulfillmentWindow\}\}/g, escapeHtml(input.fulfillmentWindow))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderStoreManualFulfilledOrderEmail = (
+  sellerName: string,
+  input: {
+    orderId: string;
+    productName: string;
+    quantity: number;
+    buyerTag: string;
+    fulfilledOn: string;
+    orderAmount: number;
+    netEarnings: number;
+    payoutStatus: string;
+    expectedPayoutDate: string;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "store-manual-order-fulfilled-email.html"), "utf-8");
+  const firstName = sellerName.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{buyerTag\}\}/g, escapeHtml(input.buyerTag))
+    .replace(/\{\{fulfilledOn\}\}/g, escapeHtml(formatDateTime(input.fulfilledOn)))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{netEarnings\}\}/g, escapeHtml(formatUsd(input.netEarnings)))
+    .replace(/\{\{payoutStatus\}\}/g, escapeHtml(input.payoutStatus))
+    .replace(/\{\{expectedPayoutDate\}\}/g, escapeHtml(input.expectedPayoutDate))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderBuyerManualFulfilledOrderEmail = (
+  buyerName: string,
+  input: {
+    orderId: string;
+    fulfilledOn: string;
+    storeName: string;
+    productName: string;
+    quantity: number;
+    orderAmount: number;
+    paymentMethod: string;
+    codes: string[];
+    fulfillmentNote?: string | null;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "buyer-manual-order-fulfilled-email.html"), "utf-8");
+  const firstName = buyerName.trim() || "there";
+  const cleanCodes = input.codes.map((code) => code.trim()).filter((code) => code.length > 0);
+
+  template = template.replace(/\{\{#if purchasedCodes\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length <= 1) return "";
+    return block.replace(/\{\{#each purchasedCodes\}\}([\s\S]*?)\{\{\/each\}\}/g, (_eachFull, eachBlock: string) => {
+      return cleanCodes.map((code) => eachBlock.replace(/\{\{this\}\}/g, escapeHtml(code))).join("");
+    });
+  });
+
+  template = template.replace(/\{\{#if purchasedCode\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length !== 1) return "";
+    return block.replace(/\{\{purchasedCode\}\}/g, escapeHtml(cleanCodes[0]));
+  });
+
+  template = renderIfBlock(template, "fulfillmentNote", Boolean((input.fulfillmentNote || "").trim()));
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{fulfilledOn\}\}/g, escapeHtml(formatDateTime(input.fulfilledOn)))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
+    .replace(/\{\{fulfillmentNote\}\}/g, escapeHtml((input.fulfillmentNote || "").trim()))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderIfBlock = (template: string, key: string, include: boolean): string => {
+  const blockRegex = new RegExp(`\\{\\{#if\\s+${key}\\}\\}([\\s\\S]*?)\\{\\{\\/if\\}\\}`, "g");
+  return template.replace(blockRegex, include ? "$1" : "");
+};
+
+const renderOrderStatusUpdateEmail = (
+  firstName: string,
+  input: {
+    status: "disputed" | "cancelled" | "refunded";
+    orderId: string;
+    productName: string;
+    quantity: number;
+    orderAmount: number;
+    updatedOn: string;
+    statusReason?: string | null;
+    refundAmount?: number;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "order-status-update-email.html"), "utf-8");
+
+  const isDisputed = input.status === "disputed";
+  const isCancelled = input.status === "cancelled";
+  const isRefunded = input.status === "refunded";
+
+  template = renderIfBlock(template, "isDisputed", isDisputed);
+  template = renderIfBlock(template, "isCancelled", isCancelled);
+  template = renderIfBlock(template, "isRefunded", isRefunded);
+  template = renderIfBlock(template, "statusReason", Boolean((input.statusReason || "").trim()));
+
+  const statusHeadline = isDisputed
+    ? "Order Disputed"
+    : isCancelled
+      ? "Order Cancelled"
+      : "Order Refunded";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{statusHeadline\}\}/g, escapeHtml(statusHeadline))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{updatedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{statusReason\}\}/g, escapeHtml((input.statusReason || "").trim()))
+    .replace(/\{\{disputeUrl\}\}/g, escapeHtml(`https://shop.gameket.io/orders?id=${encodeURIComponent(input.orderId)}`))
+    .replace(/\{\{browseUrl\}\}/g, escapeHtml("https://shop.gameket.io"))
+    .replace(/\{\{transactionsUrl\}\}/g, escapeHtml("https://shop.gameket.io/dashboard/transactions"))
+    .replace(/\{\{refundAmount\}\}/g, escapeHtml(formatUsd(input.refundAmount ?? input.orderAmount)))
+    .replace(/\{\{refundedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{refundMethod\}\}/g, "Wallet Balance")
+    .replace(/\{\{refundReference\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const sendOrderStatusUpdateEmails = async (
+  db: ReturnType<typeof getDB>,
+  order: Order,
+  input: {
+    status: "disputed" | "cancelled" | "refunded";
+    updatedOn: string;
+    statusReason?: string | null;
+    refundAmount?: number;
+  }
+) => {
+  const [buyer, seller, product] = await Promise.all([
+    order.buyerId === "anon-gameket-id" ? null : db.collection<User>("users").findOne({ id: order.buyerId }),
+    db.collection<User>("users").findOne({ id: order.sellerId }),
+    getCatalogsDB().collection<Product>("Products").findOne({ productId: order.productId }),
+  ]);
+
+  const productName = product?.name || "Product";
+  const recipients: Array<{ username: string; email: string }> = [];
+  if (buyer) recipients.push({ username: buyer.username, email: buyer.email });
+  if (seller) recipients.push({ username: seller.username, email: seller.email });
+  if (!recipients.length) return;
+
+  const tasks = recipients.map((recipient) => {
+    const html = renderOrderStatusUpdateEmail(recipient.username, {
+      status: input.status,
+      orderId: order.orderId,
+      productName,
+      quantity: order.quantity,
+      orderAmount: order.totalAmount,
+      updatedOn: input.updatedOn,
+      statusReason: input.statusReason,
+      refundAmount: input.refundAmount,
+    });
+
+    return smtpTransporter.sendMail({
+      from: process.env.SMTP_EMAIL,
+      to: recipient.email,
+      subject: "Order Status Updated",
+      html,
+    });
+  });
+
+  await Promise.allSettled(tasks);
+};
+
 function getRankFromSales(totalSales: number): number {
   if (totalSales >= 10000) return 10;
   if (totalSales >= 9000) return 9;
@@ -3001,6 +3234,56 @@ export const walletsMutations = {
 
     await walletsDB.collection<Order>("Orders").insertOne(order);
 
+    const seller = await db.collection<User>("users").findOne({ id: product.userId });
+
+    try {
+      const buyerHtml = renderBuyerManualPendingOrderEmail(user.username, {
+        orderId,
+        storeName: updatedStore?.storeName || store?.storeName || "Store",
+        placedOn: now,
+        productName: product.name,
+        quantity,
+        orderAmount: totalAmount,
+        expectedFulfillmentTime: "Within 24 hours",
+        buyerNote: cleanDataInput,
+      });
+
+      const mailTasks: Array<Promise<unknown>> = [
+        smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: user.email,
+          subject: "Manual Order Pending",
+          html: buyerHtml,
+        }),
+      ];
+
+      if (seller) {
+        const sellerHtml = renderStoreManualPendingOrderEmail(seller.username, {
+          storeName: updatedStore?.storeName || store?.storeName || "Your Store",
+          orderId,
+          productName: product.name,
+          quantity,
+          buyerTag: user.username,
+          requestedOn: now,
+          orderAmount: totalAmount,
+          fulfillmentWindow: "24 hours",
+        });
+
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: seller.email,
+            subject: "New Manual Order Pending",
+            html: sellerHtml,
+          })
+        );
+      }
+
+      await Promise.allSettled(mailTasks);
+    } catch (error) {
+      console.error("Failed to send manual pending order notification emails:", error);
+    }
+
     return {
       code: 200,
       success: true,
@@ -3586,6 +3869,83 @@ export const walletsMutations = {
         { $set: { status: "pending" } }
       );
 
+      try {
+        const sellerHtml = renderStoreManualFulfilledOrderEmail(user.username, {
+          orderId: order.orderId,
+          productName: product.name,
+          quantity: order.quantity,
+          buyerTag: order.buyerName || "Buyer",
+          fulfilledOn: now,
+          orderAmount: order.totalAmount,
+          netEarnings: order.amount,
+          payoutStatus: "Pending Release",
+          expectedPayoutDate: formatDateTime(order.releasedAt),
+        });
+
+        const mailTasks: Array<Promise<unknown>> = [
+          smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: user.email,
+            subject: "Manual Order Fulfilled",
+            html: sellerHtml,
+          }),
+        ];
+
+        if (order.buyerId === "anon-gameket-id") {
+          const guestDeposit = await walletsDB.collection<Deposit>("Deposits").findOne({ orderId: order.orderId });
+          if (guestDeposit?.userId) {
+            const guestSummaryHtml = renderOrderSummaryEmail(order.buyerName || "Guest", {
+              orderId: order.orderId,
+              orderDate: order.createdAt,
+              paymentMethod: guestDeposit.paymentMethod || "Webcheckout",
+              orderStatus: "Completed",
+              productName: product.name,
+              quantity: order.quantity,
+              amount: order.amount,
+              fee: order.fee,
+              totalAmount: order.totalAmount,
+            });
+
+            mailTasks.push(
+              smtpTransporter.sendMail({
+                from: process.env.SMTP_EMAIL,
+                to: guestDeposit.userId,
+                subject: "Your Manual Order Summary",
+                html: guestSummaryHtml,
+              })
+            );
+          }
+        } else {
+          const buyer = await db.collection<User>("users").findOne({ id: order.buyerId });
+          if (buyer) {
+            const buyerHtml = renderBuyerManualFulfilledOrderEmail(buyer.username, {
+              orderId: order.orderId,
+              fulfilledOn: now,
+              storeName: store?.storeName || "Store",
+              productName: product.name,
+              quantity: order.quantity,
+              orderAmount: order.totalAmount,
+              paymentMethod: "Wallet Balance",
+              codes: nextCodes,
+              fulfillmentNote: cleanFulfilmentNote,
+            });
+
+            mailTasks.push(
+              smtpTransporter.sendMail({
+                from: process.env.SMTP_EMAIL,
+                to: buyer.email,
+                subject: "Manual Order Fulfilled",
+                html: buyerHtml,
+              })
+            );
+          }
+        }
+
+        await Promise.allSettled(mailTasks);
+      } catch (error) {
+        console.error("Failed to send manual fulfilled order emails:", error);
+      }
+
       return {
         code: 200,
         success: true,
@@ -3728,6 +4088,17 @@ export const walletsMutations = {
         },
       }
     );
+
+    try {
+      await sendOrderStatusUpdateEmails(db, order, {
+        status: "cancelled",
+        updatedOn: now,
+        statusReason: cleanDeclineReason.length ? cleanDeclineReason : "Order was declined by the seller",
+        refundAmount: order.totalAmount,
+      });
+    } catch (error) {
+      console.error("Failed to send cancelled order status email:", error);
+    }
 
     const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
       { storeId: order.storeId },
@@ -4094,6 +4465,17 @@ export const walletsMutations = {
         { $set: { status: "refunded", isReleased: true, statusUpdatedAt: now } }
       );
 
+      try {
+        await sendOrderStatusUpdateEmails(db, order, {
+          status: "refunded",
+          updatedOn: now,
+          statusReason: "Seller processed a full refund",
+          refundAmount,
+        });
+      } catch (error) {
+        console.error("Failed to send refunded order status email:", error);
+      }
+
       // If order was disputed, close the dispute
       if (order.status === "disputed") {
         await walletsDB.collection<Dispute>("Disputes").updateOne(
@@ -4297,6 +4679,16 @@ export const walletsMutations = {
       { orderId },
       { $set: { status: "disputed", disputeReason: reason || null, statusUpdatedAt: now } }
     );
+
+    try {
+      await sendOrderStatusUpdateEmails(db, order, {
+        status: "disputed",
+        updatedOn: now,
+        statusReason: reason || "A dispute has been opened for this order",
+      });
+    } catch (error) {
+      console.error("Failed to send disputed order status email:", error);
+    }
 
     const store = await catalogsDB.collection<Store>("Stores").findOne({ storeId: order.storeId });
     const seller = await db.collection<User>("users").findOne({ id: order.sellerId });
