@@ -214,6 +214,23 @@ function sanitizeTextInput(value: string, fieldName: string, maxLength: number =
   }
   return sanitized;
 }
+
+function validateApiCallbackUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 const validRegions = new Set([
   ...Object.values(countryData.countries).map((c) => c.toLowerCase()),
   ...Object.values(countryData.regions).map((r) => r.toLowerCase()),
@@ -255,6 +272,7 @@ function mapProductDetails(product: Product) {
     discount: product.discount,
     isActive: product.isActive,
     isPromoted: product.isPromoted,
+    isAPI: Boolean(product.isAPI),
     available: product.available,
     sold: product.sold,
     type: product.type,
@@ -1659,6 +1677,8 @@ export const catalogsMutations = {
       type: productType as "Auto" | "Manual",
       isActive: false,
       isPromoted: false,
+      isAPI: false,
+      apiCallbackUrl: null,
       available: 0,
       sold: 0,
       availableCodes: [],
@@ -1716,6 +1736,15 @@ export const catalogsMutations = {
       };
     }
 
+    if (product.isAPI) {
+      return {
+        code: 400,
+        success: false,
+        message: "This is an API product. Use addProductcodesbyAPI instead",
+        available: null,
+      };
+    }
+
     // Encrypt each code
     const encryptedCodes = codes.map((code) => encryptCode(code.trim()));
 
@@ -1735,6 +1764,80 @@ export const catalogsMutations = {
       message: `${encryptedCodes.length} code(s) added successfully`,
       user,
       available: product.available + encryptedCodes.length,
+    };
+  },
+
+  addProductcodesbyAPI: async (
+    _: unknown,
+    { input }: { input: { productId: string; quantity: number; callbackurl: string } },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const userId = context.user.userId;
+    const { productId, quantity } = input;
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return { code: 400, success: false, message: "Quantity must be a positive integer", available: null };
+    }
+
+    const callbackUrl = validateApiCallbackUrl(input.callbackurl || "");
+    if (!callbackUrl) {
+      return {
+        code: 400,
+        success: false,
+        message: "callbackurl must be a valid http or https URL",
+        available: null,
+      };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can add API stock", user: null, available: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you", user, available: null };
+    }
+
+    if (product.type !== "Auto") {
+      return {
+        code: 400,
+        success: false,
+        message: "This mutation is only for Auto products. Use addProductManualcodesbyAPI for Manual products",
+        user,
+        available: null,
+      };
+    }
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      {
+        $inc: { available: quantity },
+        $set: {
+          isActive: true,
+          isAPI: true,
+          apiCallbackUrl: callbackUrl,
+        },
+      }
+    );
+
+    const updated = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: `${quantity} API stock slot(s) added successfully`,
+      user,
+      available: (updated?.available ?? product.available + quantity),
     };
   },
 
@@ -1782,6 +1885,17 @@ export const catalogsMutations = {
 
     if (product.type !== "Manual") {
       return { code: 400, success: false, message: "This mutation is only for Manual products", user, available: null, product: null };
+    }
+
+    if (product.isAPI) {
+      return {
+        code: 400,
+        success: false,
+        message: "This is an API product. Use addProductManualcodesbyAPI instead",
+        user,
+        available: null,
+        product: null,
+      };
     }
 
     const workingDaysInput = input.workingDays || [];
@@ -1890,6 +2004,149 @@ export const catalogsMutations = {
       code: 200,
       success: true,
       message: `${quantity} manual order slot(s) added successfully`,
+      user,
+      available: (updated?.available ?? product.available + quantity),
+      product: updated ? mapProductDetails(updated) : null,
+    };
+  },
+
+  addProductManualcodesbyAPI: async (
+    _: unknown,
+    {
+      input,
+    }: {
+      input: {
+        productId: string;
+        quantity: number;
+        isadditional: boolean;
+        characterCount?: number;
+        orderDescription?: string;
+        callbackurl: string;
+      };
+    },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const userId = context.user.userId;
+    const { productId, quantity, isadditional } = input;
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      return { code: 400, success: false, message: "Quantity must be a positive integer", user: null, available: null, product: null };
+    }
+
+    const callbackUrl = validateApiCallbackUrl(input.callbackurl || "");
+    if (!callbackUrl) {
+      return {
+        code: 400,
+        success: false,
+        message: "callbackurl must be a valid http or https URL",
+        user: null,
+        available: null,
+        product: null,
+      };
+    }
+
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user || !user.isStore) {
+      return { code: 403, success: false, message: "Only sellers can add manual API stock", user: null, available: null, product: null };
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+    if (!product) {
+      return { code: 404, success: false, message: "Product not found or does not belong to you", user, available: null, product: null };
+    }
+
+    if (product.type !== "Manual") {
+      return {
+        code: 400,
+        success: false,
+        message: "This mutation is only for Manual products. Use addProductcodesbyAPI for Auto products",
+        user,
+        available: null,
+        product: null,
+      };
+    }
+
+    let characterCount: number | null = null;
+    let orderDescription: string | null = null;
+
+    if (isadditional) {
+      const rawOrderDescription = (input.orderDescription || "").trim();
+      if (rawOrderDescription.length === 0) {
+        return {
+          code: 400,
+          success: false,
+          message: "orderDescription is required when isadditional is true",
+          user,
+          available: null,
+          product: null,
+        };
+      }
+
+      if (rawOrderDescription.length > MAX_MANUAL_ORDER_DESCRIPTION_LENGTH) {
+        return {
+          code: 400,
+          success: false,
+          message: `orderDescription must be at most ${MAX_MANUAL_ORDER_DESCRIPTION_LENGTH} characters`,
+          user,
+          available: null,
+          product: null,
+        };
+      }
+
+      if (input.characterCount != null) {
+        if (!Number.isInteger(input.characterCount) || input.characterCount <= 0) {
+          return { code: 400, success: false, message: "characterCount must be a positive integer", user, available: null, product: null };
+        }
+        characterCount = input.characterCount;
+      }
+
+      orderDescription = rawOrderDescription;
+    } else if (input.characterCount != null || (input.orderDescription || "").trim().length > 0) {
+      return {
+        code: 400,
+        success: false,
+        message: "characterCount and orderDescription can only be used when isadditional is true",
+        user,
+        available: null,
+        product: null,
+      };
+    }
+
+    const manualOrderConfig: ProductManualOrderConfig = {
+      isadditional,
+      characterCount,
+      orderDescription,
+      workingDays: [],
+    };
+
+    await catalogsDB.collection<Product>("Products").updateOne(
+      { productId, userId },
+      {
+        $inc: { available: quantity },
+        $set: {
+          isActive: true,
+          isAPI: true,
+          apiCallbackUrl: callbackUrl,
+          manualOrderConfig,
+        },
+      }
+    );
+
+    const updated = await catalogsDB.collection<Product>("Products").findOne({ productId, userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: `${quantity} manual API order slot(s) added successfully`,
       user,
       available: (updated?.available ?? product.available + quantity),
       product: updated ? mapProductDetails(updated) : null,

@@ -5,7 +5,7 @@ import { walletsQueries, walletsMutations } from "./modules/wallets/resolvers.js
 import { catalogsQueries, catalogsMutations } from "./modules/catalogs/resolvers.js";
 import { adminQueries, adminMutations } from "./modules/admin/resolvers.js";
 import { getCatalogsDB } from "./db.js";
-import type { Store } from "./types.js";
+import type { Product, Store } from "./types.js";
 
 const DateScalar = new GraphQLScalarType({
   name: "Date",
@@ -34,6 +34,42 @@ const DateScalar = new GraphQLScalarType({
 export const resolvers = {
   Date: DateScalar,
   User: userFieldResolvers,
+  ProductDetails: {
+    isAPI: async (parent: Record<string, unknown>) => {
+      if ("isAPI" in parent) {
+        return Boolean(parent.isAPI);
+      }
+
+      const productId = typeof parent.productId === "string" ? parent.productId : null;
+      if (!productId) return false;
+
+      const catalogsDB = getCatalogsDB();
+      const productDoc = await catalogsDB.collection<Product>("Products").findOne(
+        { productId },
+        { projection: { isAPI: 1 } }
+      );
+
+      return Boolean(productDoc?.isAPI);
+    },
+  },
+  GetProductsProductDetails: {
+    isAPI: async (parent: Record<string, unknown>) => {
+      if ("isAPI" in parent) {
+        return Boolean(parent.isAPI);
+      }
+
+      const productId = typeof parent.productId === "string" ? parent.productId : null;
+      if (!productId) return false;
+
+      const catalogsDB = getCatalogsDB();
+      const productDoc = await catalogsDB.collection<Product>("Products").findOne(
+        { productId },
+        { projection: { isAPI: 1 } }
+      );
+
+      return Boolean(productDoc?.isAPI);
+    },
+  },
   StoreDetails: {
     bio: async (parent: Record<string, unknown>) => {
       if ("bio" in parent) {

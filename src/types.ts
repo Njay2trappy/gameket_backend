@@ -149,6 +149,8 @@ export interface Product {
   discount: number;
   isActive: boolean;
   isPromoted: boolean;
+  isAPI?: boolean;
+  apiCallbackUrl?: string | null;
   available: number;
   sold: number;
   type: "Auto" | "Manual";

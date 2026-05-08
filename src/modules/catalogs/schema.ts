@@ -209,6 +209,7 @@ export const catalogsTypeDefs = `#graphql
     discount: Float!
     isActive: Boolean!
     isPromoted: Boolean!
+    isAPI: Boolean!
     available: Int!
     sold: Int!
     type: ProductType!
@@ -315,6 +316,7 @@ export const catalogsTypeDefs = `#graphql
     discount: Float!
     isActive: Boolean!
     isPromoted: Boolean!
+    isAPI: Boolean!
     available: Int!
     sold: Int!
     type: ProductType!
@@ -346,6 +348,12 @@ export const catalogsTypeDefs = `#graphql
     codes: [String!]!
   }
 
+  input AddProductCodesbyAPIInput {
+    productId: ID!
+    quantity: Int!
+    callbackurl: String!
+  }
+
   input ManualOrderWorkingDayInput {
     day: WorkingDay!
     openTime: String!
@@ -359,6 +367,15 @@ export const catalogsTypeDefs = `#graphql
     characterCount: Int
     orderDescription: String
     workingDays: [ManualOrderWorkingDayInput!]
+  }
+
+  input AddProductManualcodesbyAPIInput {
+    productId: ID!
+    quantity: Int!
+    isadditional: Boolean!
+    characterCount: Int
+    orderDescription: String
+    callbackurl: String!
   }
 
   type AddProductCodesResponse {
@@ -587,7 +604,9 @@ export const catalogsTypeDefs = `#graphql
     disableProduct(productId: ID!): DeleteProductResponse!
     enableProduct(productId: ID!): DeleteProductResponse!
     addProductCodes(input: AddProductCodesInput!): AddProductCodesResponse!
+    addProductcodesbyAPI(input: AddProductCodesbyAPIInput!): AddProductCodesResponse!
     addProductManualcodes(input: AddProductManualcodesInput!): AddProductManualcodesResponse!
+    addProductManualcodesbyAPI(input: AddProductManualcodesbyAPIInput!): AddProductManualcodesResponse!
     deleteProductCodes(input: DeleteProductCodesInput!): DeleteProductCodesResponse!
     deleteProductManualcodes(input: DeleteProductManualcodesInput!): DeleteProductManualcodesResponse!
     advertiseProduct(input: AdvertiseProductInput!): AdvertiseProductResponse!

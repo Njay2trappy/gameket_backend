@@ -99,6 +99,17 @@ export async function connectDB(): Promise<Db> {
     { $set: { type: "Auto" } }
   );
 
+  // Backfill API metadata for existing products
+  await catalogsDb.collection("Products").updateMany(
+    { isAPI: { $exists: false } },
+    { $set: { isAPI: false } }
+  );
+
+  await catalogsDb.collection("Products").updateMany(
+    { apiCallbackUrl: { $exists: false } },
+    { $set: { apiCallbackUrl: null } }
+  );
+
   // Backfill isApproved: convert string values back to boolean
   await catalogsDb.collection("Stores").updateMany(
     { isApproved: "approved" },
