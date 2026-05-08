@@ -61,6 +61,83 @@ const renderWithdrawalRequestEmail = (
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const renderStoreCodeSoldEmail = (
+  seller: User,
+  input: {
+    storeName: string;
+    orderId: string;
+    productName: string;
+    quantity: number;
+    soldOn: string;
+    buyerTag: string;
+    grossAmount: number;
+    platformFee: number;
+    netEarnings: number;
+    payoutTimeline: string;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "store-code-sold-email.html"), "utf-8");
+  const firstName = seller.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{soldOn\}\}/g, escapeHtml(formatDateTime(input.soldOn)))
+    .replace(/\{\{buyerTag\}\}/g, escapeHtml(input.buyerTag))
+    .replace(/\{\{grossAmount\}\}/g, escapeHtml(formatUsd(input.grossAmount)))
+    .replace(/\{\{platformFee\}\}/g, escapeHtml(formatUsd(input.platformFee)))
+    .replace(/\{\{netEarnings\}\}/g, escapeHtml(formatUsd(input.netEarnings)))
+    .replace(/\{\{payoutTimeline\}\}/g, escapeHtml(input.payoutTimeline))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderOrderSummaryEmail = (
+  buyerName: string,
+  input: {
+    orderId: string;
+    orderDate: string;
+    paymentMethod: string;
+    orderStatus: string;
+    productName: string;
+    quantity: number;
+    amount: number;
+    fee: number;
+    totalAmount: number;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "order-summary-email.html"), "utf-8");
+  const firstName = buyerName.trim() || "there";
+
+  const itemBlockRegex = /\{\{#each items\}\}([\s\S]*?)\{\{\/each\}\}/g;
+  const itemBlockMatch = itemBlockRegex.exec(template);
+  if (itemBlockMatch) {
+    const itemBlock = itemBlockMatch[1];
+
+    const renderedItem = itemBlock
+      .replace(/\{\{name\}\}/g, escapeHtml(input.productName))
+      .replace(/\{\{description\}\}/g, "Digital code order")
+      .replace(/\{\{quantity\}\}/g, String(input.quantity))
+      .replace(/\{\{price\}\}/g, escapeHtml(formatUsd(input.amount)));
+
+    template = template.replace(itemBlockRegex, renderedItem);
+  }
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{orderDate\}\}/g, escapeHtml(formatDateTime(input.orderDate)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
+    .replace(/\{\{orderStatus\}\}/g, escapeHtml(input.orderStatus))
+    .replace(/\{\{subtotal\}\}/g, escapeHtml(formatUsd(input.amount)))
+    .replace(/\{\{processingFee\}\}/g, escapeHtml(formatUsd(input.fee)))
+    .replace(/\{\{discount\}\}/g, escapeHtml(formatUsd(0)))
+    .replace(/\{\{grandTotal\}\}/g, escapeHtml(formatUsd(input.totalAmount)))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
 function getRankFromSales(totalSales: number): number {
   if (totalSales >= 10000) return 10;
   if (totalSales >= 9000) return 9;
@@ -2597,6 +2674,61 @@ export const walletsMutations = {
     };
 
     await walletsDB.collection<Order>("Orders").insertOne(order);
+
+    const seller = await db.collection<User>("users").findOne({ id: product.userId });
+
+    try {
+      const mailTasks: Array<Promise<unknown>> = [];
+
+      if (seller) {
+        const sellerHtml = renderStoreCodeSoldEmail(seller, {
+          storeName: updatedStore?.storeName || store?.storeName || "Your Store",
+          orderId,
+          productName: product.name,
+          quantity,
+          soldOn: now,
+          buyerTag: user.username,
+          grossAmount: amount,
+          platformFee: fee,
+          netEarnings: amount,
+          payoutTimeline: "Funds release in up to 24 hours",
+        });
+
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: seller.email,
+            subject: "Code Sold - New Store Order",
+            html: sellerHtml,
+          })
+        );
+      }
+
+      const buyerHtml = renderOrderSummaryEmail(user.username, {
+        orderId,
+        orderDate: now,
+        paymentMethod: "Wallet Balance",
+        orderStatus: "Completed",
+        productName: product.name,
+        quantity,
+        amount,
+        fee,
+        totalAmount,
+      });
+
+      mailTasks.push(
+        smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: user.email,
+          subject: "Your Order Summary",
+          html: buyerHtml,
+        })
+      );
+
+      await Promise.allSettled(mailTasks);
+    } catch (error) {
+      console.error("Failed to send order notification emails:", error);
+    }
 
     return {
       code: 200,

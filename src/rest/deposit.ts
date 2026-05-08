@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { randomBytes } from "crypto";
 import { getDB, getWalletsDB, getCatalogsDB } from "../db.js";
+import { decryptCodeOrPlain } from "../utils/codeCrypto.js";
 import type { Deposit, Transaction, Balance, Order, Product, Store, User } from "../types.js";
 import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
@@ -43,6 +44,17 @@ const formatUsd = (amount: number): string => {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
 };
 
+const formatDateTime = (iso: string): string => {
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
 const renderDepositConfirmedEmail = (
   user: User,
   deposit: Deposit,
@@ -69,6 +81,79 @@ const renderDepositConfirmedEmail = (
     .replace(/\{\{paymentMethod\}\}/g, escapeHtml(network || deposit.paymentMethod || "N/A"))
     .replace(/\{\{walletBalance\}\}/g, escapeHtml(formatUsd(walletBalance)))
     .replace(/\{\{walletUrl\}\}/g, escapeHtml("https://shop.gameket.io/user/wallet"))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderStoreCodeSoldEmail = (
+  seller: User,
+  input: {
+    storeName: string;
+    orderId: string;
+    productName: string;
+    quantity: number;
+    soldOn: string;
+    buyerTag: string;
+    grossAmount: number;
+    platformFee: number;
+    netEarnings: number;
+    payoutTimeline: string;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "store-code-sold-email.html"), "utf-8");
+  const firstName = seller.username.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{soldOn\}\}/g, escapeHtml(formatDateTime(input.soldOn)))
+    .replace(/\{\{buyerTag\}\}/g, escapeHtml(input.buyerTag))
+    .replace(/\{\{grossAmount\}\}/g, escapeHtml(formatUsd(input.grossAmount)))
+    .replace(/\{\{platformFee\}\}/g, escapeHtml(formatUsd(input.platformFee)))
+    .replace(/\{\{netEarnings\}\}/g, escapeHtml(formatUsd(input.netEarnings)))
+    .replace(/\{\{payoutTimeline\}\}/g, escapeHtml(input.payoutTimeline))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderGuestAutomaticOrderEmail = (
+  input: {
+    orderId: string;
+    orderDate: string;
+    deliveredOn: string;
+    productName: string;
+    codes: string[];
+    quantity: number;
+    totalAmount: number;
+    paymentMethod: string;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "guest-automatic-order-email.html"), "utf-8");
+  const cleanCodes = input.codes.filter((value) => value.trim().length > 0);
+
+  template = template.replace(/\{\{#if purchasedCodes\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length <= 1) return "";
+    return block.replace(/\{\{#each purchasedCodes\}\}([\s\S]*?)\{\{\/each\}\}/g, (_eachFull, eachBlock: string) => {
+      return cleanCodes
+        .map((code) => eachBlock.replace(/\{\{this\}\}/g, escapeHtml(code)))
+        .join("");
+    });
+  });
+
+  template = template.replace(/\{\{#if purchasedCode\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length !== 1) return "";
+    return block.replace(/\{\{purchasedCode\}\}/g, escapeHtml(cleanCodes[0]));
+  });
+
+  return template
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{orderDate\}\}/g, escapeHtml(formatDateTime(input.orderDate)))
+    .replace(/\{\{deliveredOn\}\}/g, escapeHtml(formatDateTime(input.deliveredOn)))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderTotal\}\}/g, escapeHtml(formatUsd(input.totalAmount)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
@@ -287,6 +372,62 @@ router.post("/webhook/deposit", async (req, res) => {
       };
 
       await walletsDB.collection<Order>("Orders").insertOne(order);
+
+      if (!isManual) {
+        const seller = await db.collection<User>("users").findOne({ id: deposit.sellerId });
+
+        try {
+          const mailTasks: Array<Promise<unknown>> = [];
+
+          if (seller) {
+            const sellerHtml = renderStoreCodeSoldEmail(seller, {
+              storeName: updatedStore?.storeName || "Your Store",
+              orderId: deposit.orderId,
+              productName: product.name,
+              quantity,
+              soldOn: now,
+              buyerTag: deposit.buyerName || "Guest",
+              grossAmount: deposit.amount,
+              platformFee: deposit.fee,
+              netEarnings: deposit.amount,
+              payoutTimeline: "Funds release in up to 24 hours",
+            });
+
+            mailTasks.push(
+              smtpTransporter.sendMail({
+                from: process.env.SMTP_EMAIL,
+                to: seller.email,
+                subject: "Code Sold - New Store Order",
+                html: sellerHtml,
+              })
+            );
+          }
+
+          const buyerHtml = renderGuestAutomaticOrderEmail({
+            orderId: deposit.orderId,
+            orderDate: now,
+            deliveredOn: now,
+            productName: product.name,
+            codes: purchasedCodes.map((code) => decryptCodeOrPlain(code)),
+            quantity,
+            totalAmount: deposit.totalCharged,
+            paymentMethod: deposit.paymentMethod || "Webcheckout",
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: process.env.SMTP_EMAIL,
+              to: deposit.userId,
+              subject: "Guest Order Completed",
+              html: buyerHtml,
+            })
+          );
+
+          await Promise.allSettled(mailTasks);
+        } catch (error) {
+          console.error("Failed to send order notification emails:", error);
+        }
+      }
 
       // Update deposit status
       await walletsDB.collection<Deposit>("Deposits").updateOne(
