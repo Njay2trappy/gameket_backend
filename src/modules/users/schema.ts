@@ -28,6 +28,13 @@ export const usersTypeDefs = `#graphql
     premium: PremiumDetails
   }
 
+  type UpdateDeliveryOptionResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+  }
+
   extend type Query {
     getUserDetails: UserDetailsResponse!
     getUserStoreDetails: GetStoreDetailsResponse!
@@ -36,5 +43,6 @@ export const usersTypeDefs = `#graphql
 
   extend type Mutation {
     buyPremium: GetPremiumResponse!
+    updateDeliveryOption(option: DeliveryOption!): UpdateDeliveryOptionResponse!
   }
 `;

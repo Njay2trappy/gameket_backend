@@ -120,6 +120,10 @@ const renderStoreStatusUpdateEmail = (
     .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
 };
 
+const shouldSendEmailForUser = (user: User): boolean => {
+  return (user.deliveryOption || "email") === "email";
+};
+
 function validateBase64Image(base64: string, fieldName: string): void {
   // Strip data URI prefix if present
   const raw = base64.replace(/^data:image\/\w+;base64,/, "");
@@ -2754,7 +2758,7 @@ export const catalogsMutations = {
     );
 
     const owner = await db.collection<User>("users").findOne({ id: store.userId });
-    if (owner) {
+    if (owner && shouldSendEmailForUser(owner)) {
       try {
         const html = renderStoreStatusUpdateEmail(owner, { ...store, isApproved: true, approveStatus: "success" }, {
           status: "verified",
@@ -2847,7 +2851,7 @@ export const catalogsMutations = {
     );
 
     const owner = await db.collection<User>("users").findOne({ id: store.userId });
-    if (owner) {
+    if (owner && shouldSendEmailForUser(owner)) {
       try {
         const html = renderStoreStatusUpdateEmail(owner, { ...store, approveStatus: "failed" }, {
           status: "failed",

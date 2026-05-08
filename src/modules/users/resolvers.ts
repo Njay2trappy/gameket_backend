@@ -36,6 +36,10 @@ const formatDateTime = (iso: string): string => {
   });
 };
 
+const shouldSendEmailForUser = (user: User): boolean => {
+  return (user.deliveryOption || "email") === "email";
+};
+
 const renderPremiumSubscriptionEmail = (
   user: User,
   activatedOn: string,
@@ -52,6 +56,11 @@ const renderPremiumSubscriptionEmail = (
 };
 
 export const userFieldResolvers = {
+  deliveryOption: (parent: Record<string, unknown>) => {
+    const value = String(parent.deliveryOption || "email").toLowerCase();
+    return value === "telegram" ? "telegram" : "email";
+  },
+
   isSuspended: (parent: Record<string, unknown>) => {
     return Boolean(parent.isSuspended);
   },
@@ -336,21 +345,23 @@ export const usersMutations = {
 
     await walletsDB.collection<Transaction>("Transactions").insertOne(transaction);
 
-    try {
-      const html = renderPremiumSubscriptionEmail(
-        user,
-        now.toISOString(),
-        expiresAt.toISOString()
-      );
+    if (shouldSendEmailForUser(user)) {
+      try {
+        const html = renderPremiumSubscriptionEmail(
+          user,
+          now.toISOString(),
+          expiresAt.toISOString()
+        );
 
-      await smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
-        to: user.email,
-        subject: "Premium Subscription Activated",
-        html,
-      });
-    } catch (error) {
-      console.error("Failed to send premium subscription email:", error);
+        await smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: user.email,
+          subject: "Premium Subscription Activated",
+          html,
+        });
+      } catch (error) {
+        console.error("Failed to send premium subscription email:", error);
+      }
     }
 
     return {
@@ -365,6 +376,40 @@ export const usersMutations = {
         expiresAt: expiresAt.toISOString(),
         isActive: true,
       },
+    };
+  },
+
+  updateDeliveryOption: async (
+    _: unknown,
+    { option }: { option: "email" | "telegram" },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return { code: 404, success: false, message: "User not found", user: null };
+    }
+
+    await db.collection<User>("users").updateOne(
+      { id: userId },
+      { $set: { deliveryOption: option } }
+    );
+
+    const updatedUser = await db.collection<User>("users").findOne({ id: userId });
+
+    return {
+      code: 200,
+      success: true,
+      message: `Delivery option updated to ${option}`,
+      user: updatedUser,
     };
   },
 };

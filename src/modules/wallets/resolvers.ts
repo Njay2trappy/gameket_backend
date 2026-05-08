@@ -40,6 +40,10 @@ const formatDateTime = (iso: string): string => {
   });
 };
 
+const shouldSendEmailForUser = (user: User): boolean => {
+  return (user.deliveryOption || "email") === "email";
+};
+
 const renderWithdrawalRequestEmail = (
   user: User,
   withdrawal: Withdrawal,
@@ -344,8 +348,8 @@ const sendOrderStatusUpdateEmails = async (
 
   const productName = product?.name || "Product";
   const recipients: Array<{ username: string; email: string }> = [];
-  if (buyer) recipients.push({ username: buyer.username, email: buyer.email });
-  if (seller) recipients.push({ username: seller.username, email: seller.email });
+  if (buyer && shouldSendEmailForUser(buyer)) recipients.push({ username: buyer.username, email: buyer.email });
+  if (seller && shouldSendEmailForUser(seller)) recipients.push({ username: seller.username, email: seller.email });
   if (!recipients.length) return;
 
   const tasks = recipients.map((recipient) => {
@@ -2679,21 +2683,23 @@ export const walletsMutations = {
     await walletsDB.collection<Transaction>("Transactions").insertOne(transactionRecord);
     await walletsDB.collection<Withdrawal>("Withdrawals").insertOne(withdrawalRecord);
 
-    try {
-      const html = renderWithdrawalRequestEmail(
-        user,
-        withdrawalRecord,
-        parseFloat((balance.availableBalance - withdrawalAmount).toFixed(2))
-      );
+    if (shouldSendEmailForUser(user)) {
+      try {
+        const html = renderWithdrawalRequestEmail(
+          user,
+          withdrawalRecord,
+          parseFloat((balance.availableBalance - withdrawalAmount).toFixed(2))
+        );
 
-      await smtpTransporter.sendMail({
-        from: process.env.SMTP_EMAIL,
-        to: user.email,
-        subject: "Withdrawal Request Received",
-        html,
-      });
-    } catch (error) {
-      console.error("Failed to send withdrawal request email:", error);
+        await smtpTransporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: user.email,
+          subject: "Withdrawal Request Received",
+          html,
+        });
+      } catch (error) {
+        console.error("Failed to send withdrawal request email:", error);
+      }
     }
 
     return {
@@ -2913,7 +2919,7 @@ export const walletsMutations = {
     try {
       const mailTasks: Array<Promise<unknown>> = [];
 
-      if (seller) {
+      if (seller && shouldSendEmailForUser(seller)) {
         const sellerHtml = renderStoreCodeSoldEmail(seller, {
           storeName: updatedStore?.storeName || store?.storeName || "Your Store",
           orderId,
@@ -2937,26 +2943,28 @@ export const walletsMutations = {
         );
       }
 
-      const buyerHtml = renderOrderSummaryEmail(user.username, {
-        orderId,
-        orderDate: now,
-        paymentMethod: "Wallet Balance",
-        orderStatus: "Completed",
-        productName: product.name,
-        quantity,
-        amount,
-        fee,
-        totalAmount,
-      });
+      if (shouldSendEmailForUser(user)) {
+        const buyerHtml = renderOrderSummaryEmail(user.username, {
+          orderId,
+          orderDate: now,
+          paymentMethod: "Wallet Balance",
+          orderStatus: "Completed",
+          productName: product.name,
+          quantity,
+          amount,
+          fee,
+          totalAmount,
+        });
 
-      mailTasks.push(
-        smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
-          to: user.email,
-          subject: "Your Order Summary",
-          html: buyerHtml,
-        })
-      );
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: user.email,
+            subject: "Your Order Summary",
+            html: buyerHtml,
+          })
+        );
+      }
 
       await Promise.allSettled(mailTasks);
     } catch (error) {
@@ -3237,27 +3245,31 @@ export const walletsMutations = {
     const seller = await db.collection<User>("users").findOne({ id: product.userId });
 
     try {
-      const buyerHtml = renderBuyerManualPendingOrderEmail(user.username, {
-        orderId,
-        storeName: updatedStore?.storeName || store?.storeName || "Store",
-        placedOn: now,
-        productName: product.name,
-        quantity,
-        orderAmount: totalAmount,
-        expectedFulfillmentTime: "Within 24 hours",
-        buyerNote: cleanDataInput,
-      });
+      const mailTasks: Array<Promise<unknown>> = [];
 
-      const mailTasks: Array<Promise<unknown>> = [
-        smtpTransporter.sendMail({
-          from: process.env.SMTP_EMAIL,
-          to: user.email,
-          subject: "Manual Order Pending",
-          html: buyerHtml,
-        }),
-      ];
+      if (shouldSendEmailForUser(user)) {
+        const buyerHtml = renderBuyerManualPendingOrderEmail(user.username, {
+          orderId,
+          storeName: updatedStore?.storeName || store?.storeName || "Store",
+          placedOn: now,
+          productName: product.name,
+          quantity,
+          orderAmount: totalAmount,
+          expectedFulfillmentTime: "Within 24 hours",
+          buyerNote: cleanDataInput,
+        });
 
-      if (seller) {
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: process.env.SMTP_EMAIL,
+            to: user.email,
+            subject: "Manual Order Pending",
+            html: buyerHtml,
+          })
+        );
+      }
+
+      if (seller && shouldSendEmailForUser(seller)) {
         const sellerHtml = renderStoreManualPendingOrderEmail(seller.username, {
           storeName: updatedStore?.storeName || store?.storeName || "Your Store",
           orderId,
@@ -3882,14 +3894,18 @@ export const walletsMutations = {
           expectedPayoutDate: formatDateTime(order.releasedAt),
         });
 
-        const mailTasks: Array<Promise<unknown>> = [
-          smtpTransporter.sendMail({
-            from: process.env.SMTP_EMAIL,
-            to: user.email,
-            subject: "Manual Order Fulfilled",
-            html: sellerHtml,
-          }),
-        ];
+        const mailTasks: Array<Promise<unknown>> = [];
+
+        if (shouldSendEmailForUser(user)) {
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: process.env.SMTP_EMAIL,
+              to: user.email,
+              subject: "Manual Order Fulfilled",
+              html: sellerHtml,
+            })
+          );
+        }
 
         if (order.buyerId === "anon-gameket-id") {
           const guestDeposit = await walletsDB.collection<Deposit>("Deposits").findOne({ orderId: order.orderId });
@@ -3917,7 +3933,7 @@ export const walletsMutations = {
           }
         } else {
           const buyer = await db.collection<User>("users").findOne({ id: order.buyerId });
-          if (buyer) {
+          if (buyer && shouldSendEmailForUser(buyer)) {
             const buyerHtml = renderBuyerManualFulfilledOrderEmail(buyer.username, {
               orderId: order.orderId,
               fulfilledOn: now,

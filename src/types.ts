@@ -2,6 +2,7 @@ export interface User {
   id: string;
   username: string;
   email: string;
+  deliveryOption: "email" | "telegram";
   country: string;
   isActive: boolean;
   isSuspended: boolean;

@@ -32,6 +32,12 @@ export async function connectDB(): Promise<Db> {
     { $set: { authProvider: "email" } }
   );
 
+  // Backfill delivery option for existing users
+  await db.collection("users").updateMany(
+    { deliveryOption: { $exists: false } },
+    { $set: { deliveryOption: "email" } }
+  );
+
   // Backfill type for existing products that don't have it
   await catalogsDb.collection("Products").updateMany(
     { type: { $exists: false } },

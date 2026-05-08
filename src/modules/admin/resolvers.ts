@@ -56,6 +56,10 @@ const formatDateTime = (iso: string): string => {
   });
 };
 
+const shouldSendEmailForUser = (user: User): boolean => {
+  return (user.deliveryOption || "email") === "email";
+};
+
 const renderIfBlock = (template: string, key: string, include: boolean): string => {
   const blockRegex = new RegExp(`\\{\\{#if\\s+${key}\\}\\}([\\s\\S]*?)\\{\\{\\/if\\}\\}`, "g");
   return template.replace(blockRegex, include ? "$1" : "");
@@ -163,8 +167,8 @@ const sendOrderStatusUpdateEmails = async (
 
   const productName = product?.name || "Product";
   const recipients: Array<{ username: string; email: string }> = [];
-  if (buyer) recipients.push({ username: buyer.username, email: buyer.email });
-  if (seller) recipients.push({ username: seller.username, email: seller.email });
+  if (buyer && shouldSendEmailForUser(buyer)) recipients.push({ username: buyer.username, email: buyer.email });
+  if (seller && shouldSendEmailForUser(seller)) recipients.push({ username: seller.username, email: seller.email });
   if (!recipients.length) return;
 
   await Promise.allSettled(
@@ -1796,7 +1800,7 @@ export const adminMutations = {
 
     const updatedUser = await users.findOne({ id: userId });
 
-    if (updatedUser) {
+    if (updatedUser && shouldSendEmailForUser(updatedUser)) {
       try {
         const html = renderUserSuspendedEmail(updatedUser, new Date().toISOString());
         await smtpTransporter.sendMail({
@@ -2027,6 +2031,7 @@ export const adminMutations = {
         id: uuidv4(),
         username,
         email: adminEmail,
+        deliveryOption: "email",
         country: "Unknown",
         isActive: true,
         isSuspended: false,
@@ -2478,7 +2483,7 @@ export const adminMutations = {
 
     if (updated) {
       const user = await db.collection<User>("users").findOne({ id: updated.userId });
-      if (user) {
+      if (user && shouldSendEmailForUser(user)) {
         try {
           const html = renderWithdrawalStatusUpdateEmail(user, updated, "approved");
           await smtpTransporter.sendMail({
@@ -2560,7 +2565,7 @@ export const adminMutations = {
 
     if (updated) {
       const user = await db.collection<User>("users").findOne({ id: updated.userId });
-      if (user) {
+      if (user && shouldSendEmailForUser(user)) {
         try {
           const html = renderWithdrawalStatusUpdateEmail(user, updated, "declined");
           await smtpTransporter.sendMail({

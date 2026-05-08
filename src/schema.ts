@@ -11,6 +11,7 @@ const baseTypeDefs = `#graphql
     id: ID!
     username: String!
     email: String!
+    deliveryOption: DeliveryOption!
     country: String!
     isActive: Boolean!
     isSuspended: Boolean!
@@ -26,6 +27,11 @@ const baseTypeDefs = `#graphql
     premium: PremiumDetails
     products: [ProductDetails!]
     transactions: [TransactionDetails!]
+  }
+
+  enum DeliveryOption {
+    email
+    telegram
   }
 
   type Query {

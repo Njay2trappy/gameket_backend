@@ -129,6 +129,8 @@ const escapeHtml = (value: string): string => value
   .replace(/"/g, "&quot;")
   .replace(/'/g, "&#39;");
 
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const renderVerificationEmail = (user: User, verificationToken: string): string => {
   const confirmEmailBaseUrl = (process.env.CONFIRM_EMAIL_URL || "https://shop.gameket.io/auth/confirm-email").trim();
   const confirmEmailUrl = `${confirmEmailBaseUrl}?token=${encodeURIComponent(verificationToken)}&email=${encodeURIComponent(user.email)}`;
@@ -255,6 +257,7 @@ export const authMutations = {
       id: userId,
       username,
       email,
+      deliveryOption: "email",
       country,
       isActive: true,
       isSuspended: false,
@@ -380,8 +383,30 @@ export const authMutations = {
     const email = input.email.trim().toLowerCase();
     const password = input.password;
 
-    const account = await accounts.findOne({ email });
-    if (!account) {
+    let account = await accounts.findOne({
+      email: { $regex: `^${escapeRegex(email)}$`, $options: "i" },
+    });
+    let user: User | null = null;
+
+    if (account) {
+      user = await users.findOne({ id: account.userId });
+    }
+
+    // Recover gracefully when user.email changed but accounts.email was not updated.
+    if (!account || !user) {
+      const userByEmail = await users.findOne({
+        email: { $regex: `^${escapeRegex(email)}$`, $options: "i" },
+      });
+      if (userByEmail) {
+        const accountByUserId = await accounts.findOne({ userId: userByEmail.id });
+        if (accountByUserId) {
+          account = accountByUserId;
+          user = userByEmail;
+        }
+      }
+    }
+
+    if (!account || !user) {
       return loginFailureResponse(401, "Invalid email or password");
     }
 
@@ -394,9 +419,12 @@ export const authMutations = {
       return loginFailureResponse(401, "Invalid email or password");
     }
 
-    const user = await users.findOne({ id: account.userId });
-    if (!user) {
-      return loginFailureResponse(401, "Invalid email or password");
+    if (account.email !== user.email && email === user.email) {
+      await accounts.updateOne(
+        { userId: account.userId },
+        { $set: { email: user.email } }
+      );
+      account = { ...account, email: user.email };
     }
 
     if (hasTwoFactorConfigured(account)) {
@@ -554,6 +582,7 @@ export const authMutations = {
       id: userId,
       username,
       email,
+      deliveryOption: "email",
       country,
       isActive: true,
       isSuspended: false,
@@ -1126,25 +1155,14 @@ export const authMutations = {
       return { code: 404, success: false, message: "User not found" };
     }
 
-    const hasActiveOtp = Boolean(
-      account.passwordResetOtp &&
-      account.passwordResetOtpExpiresAt &&
-      new Date(account.passwordResetOtpExpiresAt) > new Date()
+    const otp = String(randomInt(100000, 1000000));
+    const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+
+    await accounts.updateOne(
+      { email },
+      { $set: { passwordResetOtp: hashedOtp, passwordResetOtpExpiresAt: otpExpiresAt } }
     );
-
-    const otp = hasActiveOtp
-      ? account.passwordResetOtp!
-      : String(randomInt(100000, 1000000));
-    const otpExpiresAt = hasActiveOtp
-      ? account.passwordResetOtpExpiresAt!
-      : new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
-    if (!hasActiveOtp) {
-      await accounts.updateOne(
-        { email },
-        { $set: { passwordResetOtp: otp, passwordResetOtpExpiresAt: otpExpiresAt } }
-      );
-    }
 
     try {
       await smtpTransporter.sendMail({
@@ -1154,12 +1172,10 @@ export const authMutations = {
         html: renderPasswordResetOtpEmail(user, otp),
       });
     } catch (emailError) {
-      if (!hasActiveOtp) {
-        await accounts.updateOne(
-          { email },
-          { $set: { passwordResetOtp: null, passwordResetOtpExpiresAt: null } }
-        );
-      }
+      await accounts.updateOne(
+        { email },
+        { $set: { passwordResetOtp: null, passwordResetOtpExpiresAt: null } }
+      );
 
       console.error("Failed to send password reset OTP email:", emailError);
       return { code: 500, success: false, message: "Failed to send password reset OTP email" };
@@ -1228,7 +1244,12 @@ export const authMutations = {
       return { code: 400, success: false, message: "Password reset OTP has expired" };
     }
 
-    if (account.passwordResetOtp !== otp) {
+    const storedOtp = account.passwordResetOtp;
+    const otpMatches = storedOtp.startsWith("$2")
+      ? await bcrypt.compare(otp, storedOtp)
+      : storedOtp === otp;
+
+    if (!otpMatches) {
       return { code: 400, success: false, message: "Invalid password reset OTP" };
     }
 
