@@ -6,6 +6,22 @@ let db: Db;
 let walletsDb: Db;
 let catalogsDb: Db;
 
+const merchantBioTemplates = [
+  "{{storeName}} is your trusted merchant store for instant digital delivery and dependable support.",
+  "Welcome to {{storeName}}, a verified merchant store focused on speed, reliability, and secure transactions.",
+  "{{storeName}} provides quality digital products with fast fulfillment and merchant-grade service.",
+  "At {{storeName}}, we combine competitive prices with smooth delivery and consistent customer support.",
+  "{{storeName}} is built for buyers who want reliable digital products from a dedicated merchant store.",
+];
+
+const generateMerchantStoreBio = (storeName: string): string => {
+  const normalizedStoreName = storeName.trim() || "This store";
+  const template = merchantBioTemplates[Math.floor(Math.random() * merchantBioTemplates.length)]
+    || "{{storeName}} is a verified merchant store on Gameket.";
+
+  return template.replace(/\{\{storeName\}\}/g, normalizedStoreName);
+};
+
 export async function connectDB(): Promise<Db> {
   const uri = process.env.MONGODB_URI;
   if (!uri) {
@@ -122,6 +138,50 @@ export async function connectDB(): Promise<Db> {
     { requestCount: { $exists: false } },
     { $set: { requestCount: 0 } }
   );
+
+  // Backfill merchant bio for existing merchant stores where bio is missing
+  const merchantsWithoutBioCursor = catalogsDb
+    .collection("Stores")
+    .find({
+      type: "merchant",
+      $or: [
+        { bio: { $exists: false } },
+        { bio: null },
+        { bio: "" },
+      ],
+    })
+    .project({ _id: 1, storeName: 1 });
+
+  const merchantBioBulkOps: any[] = [];
+  let merchantBioBackfilledCount = 0;
+
+  for await (const store of merchantsWithoutBioCursor) {
+    merchantBioBulkOps.push({
+      updateOne: {
+        filter: { _id: store._id as any },
+        update: {
+          $set: {
+            bio: generateMerchantStoreBio(String(store.storeName || "This store")),
+          },
+        },
+      },
+    });
+
+    merchantBioBackfilledCount += 1;
+
+    if (merchantBioBulkOps.length >= 500) {
+      await catalogsDb.collection("Stores").bulkWrite(merchantBioBulkOps, { ordered: false });
+      merchantBioBulkOps.length = 0;
+    }
+  }
+
+  if (merchantBioBulkOps.length > 0) {
+    await catalogsDb.collection("Stores").bulkWrite(merchantBioBulkOps, { ordered: false });
+  }
+
+  if (merchantBioBackfilledCount > 0) {
+    console.log(`✅ Backfilled merchant bio for ${merchantBioBackfilledCount} store(s)`);
+  }
 
   // Backfill: Manual orders that are still stuck in "pending" from older fulfilment behavior
   // Current manual lifecycle is billed -> completed (or cancelled/refunded), so pending is stale.

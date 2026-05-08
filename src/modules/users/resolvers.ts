@@ -46,10 +46,28 @@ const shouldSendEmailForUser = (user: User): boolean => {
   return (user.deliveryOption || "email") === "email";
 };
 
+const merchantBioTemplates = [
+  "{{storeName}} is your trusted merchant store for instant digital delivery and dependable support.",
+  "Welcome to {{storeName}}, a verified merchant store focused on speed, reliability, and secure transactions.",
+  "{{storeName}} provides quality digital products with fast fulfillment and merchant-grade service.",
+  "At {{storeName}}, we combine competitive prices with smooth delivery and consistent customer support.",
+  "{{storeName}} is built for buyers who want reliable digital products from a dedicated merchant store.",
+];
+
+const generateMerchantStoreBio = (storeName: string): string => {
+  const normalizedStoreName = storeName.trim() || "This store";
+  const template = merchantBioTemplates[Math.floor(Math.random() * merchantBioTemplates.length)]
+    || "{{storeName}} is a verified merchant store on Gameket.";
+
+  return template.replace(/\{\{storeName\}\}/g, normalizedStoreName);
+};
+
 const mapStoreDetails = (storeDoc: Store) => {
   return {
     storeId: storeDoc.storeId,
     storeName: storeDoc.storeName,
+    bio: storeDoc.bio ?? null,
+    storeImage: storeDoc.storeImage ?? null,
     isActive: storeDoc.isActive,
     isApproved: storeDoc.isApproved,
     approveStatus: storeDoc.approveStatus ?? null,
@@ -685,6 +703,169 @@ export const usersMutations = {
     };
   },
 
+  addStoreImage: async (
+    _: unknown,
+    { image }: { image: string },
+    context: Context
+  ) => {
+    if (!context.user) {
+      throw new GraphQLError(context.authError || "Authentication required", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    if (context.user.role === "admin") {
+      return {
+        code: 403,
+        success: false,
+        message: "Admin token is not allowed for this action",
+        user: null,
+        store: null,
+        imgurl: null,
+      };
+    }
+
+    const rawImage = image.trim();
+    if (!rawImage) {
+      return {
+        code: 400,
+        success: false,
+        message: "Image is required",
+        user: null,
+        store: null,
+        imgurl: null,
+      };
+    }
+
+    const { userId } = context.user;
+    const db = getDB();
+    const catalogsDB = getCatalogsDB();
+
+    const user = await db.collection<User>("users").findOne({ id: userId });
+    if (!user) {
+      return {
+        code: 404,
+        success: false,
+        message: "User not found",
+        user: null,
+        store: null,
+        imgurl: null,
+      };
+    }
+
+    if (!user.isStore) {
+      return {
+        code: 403,
+        success: false,
+        message: "Only store users can upload a store image",
+        user,
+        store: null,
+        imgurl: null,
+      };
+    }
+
+    const store = await catalogsDB.collection<Store>("Stores").findOne({ userId });
+    if (!store) {
+      return {
+        code: 404,
+        success: false,
+        message: "Store not found",
+        user,
+        store: null,
+        imgurl: null,
+      };
+    }
+
+    if (store.type !== "merchant") {
+      return {
+        code: 403,
+        success: false,
+        message: "Only merchant stores can upload store images",
+        user,
+        store: mapStoreDetails(store),
+        imgurl: null,
+      };
+    }
+
+    const apiKey = process.env.IMGBB_API_KEY;
+    if (!apiKey) {
+      return {
+        code: 500,
+        success: false,
+        message: "Image upload not configured",
+        user,
+        store: mapStoreDetails(store),
+        imgurl: null,
+      };
+    }
+
+    try {
+      const formData = new URLSearchParams();
+      formData.append("key", apiKey);
+      formData.append("image", rawImage);
+
+      const response = await fetch("https://api.imgbb.com/1/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json() as {
+        success?: boolean;
+        data?: { url?: string };
+        error?: { message?: string };
+      };
+
+      const imgurl = data.data?.url ?? null;
+      if (!response.ok || !data.success || !imgurl) {
+        return {
+          code: 400,
+          success: false,
+          message: data.error?.message || "Image upload failed",
+          user,
+          store: mapStoreDetails(store),
+          imgurl: null,
+        };
+      }
+
+      const storeUpdate = await catalogsDB.collection<Store>("Stores").updateOne(
+        { storeId: store.storeId, userId },
+        { $set: { storeImage: imgurl } }
+      );
+
+      if (storeUpdate.matchedCount === 0) {
+        const refreshedStore = await catalogsDB.collection<Store>("Stores").findOne({ storeId: store.storeId, userId });
+        return {
+          code: 409,
+          success: false,
+          message: "Unable to save store image. Please try again",
+          user,
+          store: refreshedStore ? mapStoreDetails(refreshedStore) : mapStoreDetails(store),
+          imgurl: null,
+        };
+      }
+
+      const updatedStore = await catalogsDB.collection<Store>("Stores").findOne({ storeId: store.storeId, userId });
+
+      return {
+        code: 200,
+        success: true,
+        message: "Store image uploaded successfully",
+        user,
+        store: updatedStore ? mapStoreDetails(updatedStore) : mapStoreDetails(store),
+        imgurl,
+      };
+    } catch (error) {
+      return {
+        code: 500,
+        success: false,
+        message: "Image upload failed",
+        user,
+        store: mapStoreDetails(store),
+        imgurl: null,
+      };
+    }
+  },
+
   becomeMerchant: async (_: unknown, __: unknown, context: Context) => {
     if (!context.user) {
       throw new GraphQLError(context.authError || "Authentication required", {
@@ -896,6 +1077,7 @@ export const usersMutations = {
       {
         $set: {
           type: "merchant",
+          bio: generateMerchantStoreBio(store.storeName),
           merchantLockedAmount: MERCHANT_LOCK_AMOUNT,
           merchantLockedAt: lockedAt,
           merchantApiKey,

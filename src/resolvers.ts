@@ -4,6 +4,8 @@ import { usersQueries, usersMutations, userFieldResolvers } from "./modules/user
 import { walletsQueries, walletsMutations } from "./modules/wallets/resolvers.js";
 import { catalogsQueries, catalogsMutations } from "./modules/catalogs/resolvers.js";
 import { adminQueries, adminMutations } from "./modules/admin/resolvers.js";
+import { getCatalogsDB } from "./db.js";
+import type { Store } from "./types.js";
 
 const DateScalar = new GraphQLScalarType({
   name: "Date",
@@ -32,6 +34,40 @@ const DateScalar = new GraphQLScalarType({
 export const resolvers = {
   Date: DateScalar,
   User: userFieldResolvers,
+  StoreDetails: {
+    bio: async (parent: Record<string, unknown>) => {
+      if ("bio" in parent) {
+        return (parent.bio as string | null) ?? null;
+      }
+
+      const storeId = typeof parent.storeId === "string" ? parent.storeId : null;
+      if (!storeId) return null;
+
+      const catalogsDB = getCatalogsDB();
+      const storeDoc = await catalogsDB.collection<Store>("Stores").findOne(
+        { storeId },
+        { projection: { bio: 1 } }
+      );
+
+      return storeDoc?.bio ?? null;
+    },
+    storeImage: async (parent: Record<string, unknown>) => {
+      if ("storeImage" in parent) {
+        return (parent.storeImage as string | null) ?? null;
+      }
+
+      const storeId = typeof parent.storeId === "string" ? parent.storeId : null;
+      if (!storeId) return null;
+
+      const catalogsDB = getCatalogsDB();
+      const storeDoc = await catalogsDB.collection<Store>("Stores").findOne(
+        { storeId },
+        { projection: { storeImage: 1 } }
+      );
+
+      return storeDoc?.storeImage ?? null;
+    },
+  },
 
   Query: {
     _empty: () => true,

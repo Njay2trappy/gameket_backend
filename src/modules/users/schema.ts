@@ -84,6 +84,15 @@ export const usersTypeDefs = `#graphql
     merchantCredentials: MerchantCredentials
   }
 
+  type AddStoreImageResponse {
+    code: Int!
+    success: Boolean!
+    message: String!
+    user: User
+    store: StoreDetails
+    imgurl: String
+  }
+
   extend type Query {
     getUserDetails: UserDetailsResponse!
     getUserStoreDetails: GetStoreDetailsResponse!
@@ -95,6 +104,7 @@ export const usersTypeDefs = `#graphql
     buyPremium: GetPremiumResponse!
     updateDeliveryOption(option: DeliveryOption!): UpdateDeliveryOptionResponse!
     UpdateMerchantdetails(input: UpdateMerchantDetailsInput!): UpdateMerchantDetailsResponse!
+    addStoreImage(image: String!): AddStoreImageResponse!
     becomeMerchant: MerchantActionResponse!
     UnfreezeMerchantfunds: MerchantActionResponse!
   }

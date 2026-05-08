@@ -36,6 +36,8 @@ export const catalogsTypeDefs = `#graphql
   type StoreDetails {
     storeId: ID!
     storeName: String!
+    bio: String
+    storeImage: String
     isActive: Boolean!
     isApproved: Boolean!
     approveStatus: ApproveStatus

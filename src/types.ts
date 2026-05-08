@@ -185,6 +185,8 @@ export interface Store {
   userId: string;
   storeId: string;
   storeName: string;
+  bio?: string | null;
+  storeImage?: string | null;
   isActive: boolean;
   isApproved: boolean;
   approveStatus: string | null;
