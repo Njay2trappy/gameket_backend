@@ -73,6 +73,15 @@ export async function connectDB(): Promise<Db> {
     { expireAfterSeconds: 0, name: "merchant_nonce_ttl_idx" }
   );
 
+  await catalogsDb.collection("MerchantIdempotencyKeys").createIndex(
+    { storeId: 1, operation: 1, idempotencyKey: 1 },
+    { unique: true, name: "merchant_idempotency_unique_idx" }
+  );
+  await catalogsDb.collection("MerchantIdempotencyKeys").createIndex(
+    { expiresAt: 1 },
+    { expireAfterSeconds: 0, name: "merchant_idempotency_ttl_idx" }
+  );
+
   console.log("✅ Connected to MongoDB");
 
   // Backfill createdAt for existing stores that don't have it

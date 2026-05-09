@@ -213,6 +213,18 @@ export interface MerchantRequestNonce {
   expiresAt: string;
 }
 
+export interface MerchantIdempotencyRecord {
+  storeId: string;
+  operation: string;
+  idempotencyKey: string;
+  requestHash: string;
+  state: "pending" | "completed";
+  statusCode: number | null;
+  responseBody: unknown;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface PromotedStore {
   userId: string;
   storeId: string;
