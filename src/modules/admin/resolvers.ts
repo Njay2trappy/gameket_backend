@@ -7,7 +7,7 @@ import nodemailer from "nodemailer";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
-import { recordAuditEvent } from "../../audit.js";
+import { recordAuditEvent, recordAdminLog } from "../../audit.js";
 import type { User, Store, Premium, Transaction, Product, Order, Account, VerificationRequest, Support, Balance, Dispute, DisputeMessage, Withdrawal } from "../../types.js";
 import type { Context } from "../../index.js";
 import { catalogsMutations, catalogsQueries } from "../catalogs/resolvers.js";
@@ -317,6 +317,24 @@ const recordAdminWithdrawalDecision = async (input: {
       ...(input.metadata || {}),
     },
   });
+
+  // Also record to AdminLogs collection
+  if (actorId) {
+    await recordAdminLog({
+      adminId: actorId,
+      adminType: "admin",
+      action: input.eventName === "WITHDRAWAL_APPROVED" ? "WITHDRAWAL_APPROVE" : "WITHDRAWAL_DECLINE",
+      status: input.outcome,
+      targetType: "withdrawal",
+      targetId: input.withdrawalId,
+      details: `Admin ${input.eventName === "WITHDRAWAL_APPROVED" ? "approved" : "declined"} withdrawal ${input.withdrawalId} - Reason: ${input.reason}`,
+      metadata: {
+        reason: input.reason,
+        targetUserId: input.targetUserId,
+        ...(input.metadata || {}),
+      },
+    });
+  }
 };
 
 async function buildAdminUsersConnection(
@@ -1764,20 +1782,58 @@ export const adminMutations = {
     const password = input.password;
 
     if (!email || !password) {
+      await recordAdminLog({
+        adminId: null,
+        adminType: "support",
+        action: "SUPPORT_LOGIN_FAILURE",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: "Support login failed: missing email or password",
+      });
       return { code: 400, success: false, message: "Email and password are required", token: null, support: null };
     }
 
     const support = await supports.findOne({ email });
     if (!support) {
+      await recordAdminLog({
+        adminId: null,
+        adminType: "support",
+        action: "SUPPORT_LOGIN_FAILURE",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: `Support login failed: invalid credentials for email ${email}`,
+        metadata: { email },
+      });
       return { code: 401, success: false, message: "Invalid email or password", token: null, support: null };
     }
 
     const valid = await bcrypt.compare(password, support.password || "");
     if (!valid) {
+      await recordAdminLog({
+        adminId: support.supportId,
+        adminType: "support",
+        action: "SUPPORT_LOGIN_FAILURE",
+        status: "failure",
+        targetType: "support",
+        targetId: support.supportId,
+        details: `Support login failed: invalid password for ${support.email}`,
+        metadata: { email },
+      });
       return { code: 401, success: false, message: "Invalid email or password", token: null, support: null };
     }
 
     if (support.isSuspended || !support.isActive || !support.hasSupportPrivileges) {
+      await recordAdminLog({
+        adminId: support.supportId,
+        adminType: "support",
+        action: "SUPPORT_LOGIN_FAILURE",
+        status: "failure",
+        targetType: "support",
+        targetId: support.supportId,
+        details: `Support login blocked: account suspended=${support.isSuspended}, inactive=${!support.isActive}, no privileges=${!support.hasSupportPrivileges}`,
+      });
       return { code: 403, success: false, message: "Support account is suspended or inactive", token: null, support: null };
     }
 
@@ -1793,6 +1849,17 @@ export const adminMutations = {
       { supportId: support.supportId },
       { $set: { tokenVersion: newTokenVersion, lastLogin: loginAt } }
     );
+
+    await recordAdminLog({
+      adminId: support.supportId,
+      adminType: "support",
+      action: "SUPPORT_LOGIN",
+      status: "success",
+      targetType: "support",
+      targetId: support.supportId,
+      details: `Support staff ${support.email} logged in successfully`,
+      metadata: { email: support.email, tokenVersion: newTokenVersion },
+    });
 
     const token = jwt.sign(
       { supportId: support.supportId, email: support.email, role: "support", tokenVersion: newTokenVersion },
@@ -1826,10 +1893,30 @@ export const adminMutations = {
 
     const existingUser = await users.findOne({ id: userId });
     if (!existingUser) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "USER_SUSPEND",
+        status: "failure",
+        targetType: "user",
+        targetId: userId,
+        details: `Failed to suspend user: user not found`,
+        metadata: { userId },
+      });
       return { code: 404, success: false, message: "User not found", user: null };
     }
 
     if (existingUser.isSuspended) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "USER_SUSPEND",
+        status: "success",
+        targetType: "user",
+        targetId: userId,
+        details: `User already suspended (no action taken)`,
+        metadata: { userId, username: existingUser.username },
+      });
       return { code: 200, success: true, message: "User is already suspended", user: existingUser };
     }
 
@@ -1876,6 +1963,17 @@ export const adminMutations = {
       }
     }
 
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "USER_SUSPEND",
+      status: "success",
+      targetType: "user",
+      targetId: userId,
+      details: `Admin ${context.user.userId} suspended user ${existingUser.username} (${existingUser.email})`,
+      metadata: { userId, username: existingUser.username, email: existingUser.email, isStore: existingUser.isStore },
+    });
+
     return {
       code: 200,
       success: true,
@@ -1900,10 +1998,30 @@ export const adminMutations = {
 
     const existingUser = await users.findOne({ id: userId });
     if (!existingUser) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "USER_ACTIVATE",
+        status: "failure",
+        targetType: "user",
+        targetId: userId,
+        details: `Failed to activate user: user not found`,
+        metadata: { userId },
+      });
       return { code: 404, success: false, message: "User not found", user: null };
     }
 
     if (!existingUser.isSuspended) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "USER_ACTIVATE",
+        status: "success",
+        targetType: "user",
+        targetId: userId,
+        details: `User already active (no action taken)`,
+        metadata: { userId, username: existingUser.username },
+      });
       return { code: 200, success: true, message: "User is already active", user: existingUser };
     }
 
@@ -1926,6 +2044,17 @@ export const adminMutations = {
     }
 
     const updatedUser = await users.findOne({ id: userId });
+
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "USER_ACTIVATE",
+      status: "success",
+      targetType: "user",
+      targetId: userId,
+      details: `Admin ${context.user.userId} activated user ${existingUser.username} (${existingUser.email})`,
+      metadata: { userId, username: existingUser.username, email: existingUser.email },
+    });
 
     return {
       code: 200,
@@ -1953,32 +2082,98 @@ export const adminMutations = {
     const cleanUsername = username.trim();
 
     if (!normalizedEmail || !password || !cleanUsername) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: "Failed to add support: missing required fields",
+      });
       return { code: 400, success: false, message: "Email, username and password are required", support: null };
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: `Failed to add support: invalid email format`,
+        metadata: { email: normalizedEmail },
+      });
       return { code: 400, success: false, message: "Invalid email format", support: null };
     }
 
     if (password.length < 8) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: "Failed to add support: password too short",
+      });
       return { code: 400, success: false, message: "Password must be at least 8 characters", support: null };
     }
 
     if (cleanUsername.length > 30) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: "Failed to add support: username too long",
+      });
       return { code: 400, success: false, message: "Username must be at most 30 characters", support: null };
     }
 
     if (/\s/.test(cleanUsername)) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: "Failed to add support: username contains spaces",
+      });
       return { code: 400, success: false, message: "Username must not contain spaces", support: null };
     }
 
     const existingByEmail = await supports.findOne({ email: normalizedEmail });
     if (existingByEmail) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: `Failed to add support: email already exists`,
+        metadata: { email: normalizedEmail },
+      });
       return { code: 409, success: false, message: "Support email already exists", support: null };
     }
 
     const existingByUsername = await supports.findOne({ username: cleanUsername });
     if (existingByUsername) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_ADD",
+        status: "failure",
+        targetType: "support",
+        targetId: null,
+        details: `Failed to add support: username already exists`,
+        metadata: { username: cleanUsername },
+      });
       return { code: 409, success: false, message: "Support username already exists", support: null };
     }
 
@@ -1998,6 +2193,17 @@ export const adminMutations = {
     };
 
     await supports.insertOne(support);
+
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "SUPPORT_ADD",
+      status: "success",
+      targetType: "support",
+      targetId: support.supportId,
+      details: `Admin ${context.user.userId} created new support account: ${cleanUsername} (${normalizedEmail})`,
+      metadata: { supportId: support.supportId, email: normalizedEmail, username: cleanUsername },
+    });
 
     return {
       code: 201,
@@ -2023,10 +2229,30 @@ export const adminMutations = {
 
     const existingSupport = await supports.findOne({ supportId });
     if (!existingSupport) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_SUSPEND",
+        status: "failure",
+        targetType: "support",
+        targetId: supportId,
+        details: `Failed to suspend support: support account not found`,
+        metadata: { supportId },
+      });
       return { code: 404, success: false, message: "Support account not found", support: null };
     }
 
     if (existingSupport.isSuspended && !existingSupport.isActive && !existingSupport.hasSupportPrivileges) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "SUPPORT_SUSPEND",
+        status: "success",
+        targetType: "support",
+        targetId: supportId,
+        details: `Support account already suspended (no action taken)`,
+        metadata: { supportId, email: existingSupport.email },
+      });
       return { code: 200, success: true, message: "Support account is already suspended", support: toSupportNode(existingSupport) };
     }
 
@@ -2045,6 +2271,17 @@ export const adminMutations = {
     );
 
     const updatedSupport = await supports.findOne({ supportId });
+
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "SUPPORT_SUSPEND",
+      status: "success",
+      targetType: "support",
+      targetId: supportId,
+      details: `Admin ${context.user.userId} suspended support account: ${existingSupport.username} (${existingSupport.email})`,
+      metadata: { supportId, email: existingSupport.email, username: existingSupport.username },
+    });
 
     return {
       code: 200,
@@ -2757,16 +2994,44 @@ export const adminMutations = {
 
     const trimmed = (message || "").trim();
     if (!trimmed) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_UPDATE",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: "Failed to update dispute: message cannot be empty",
+      });
       return { code: 400, success: false, message: "Message cannot be empty", dispute: null };
     }
 
     const walletsDB = getWalletsDB();
     const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
     if (!dispute) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_UPDATE",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Failed to update dispute: dispute not found`,
+      });
       return { code: 404, success: false, message: "Dispute not found", dispute: null };
     }
 
     if (dispute.status === "closed") {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_UPDATE",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Failed to update dispute: dispute is closed`,
+        metadata: { disputeStatus: dispute.status },
+      });
       return { code: 400, success: false, message: "Cannot update a closed dispute", dispute: null };
     }
 
@@ -2784,6 +3049,17 @@ export const adminMutations = {
     );
 
     const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "DISPUTE_UPDATE",
+      status: "success",
+      targetType: "dispute",
+      targetId: disputeId,
+      details: `Admin added message to dispute ${disputeId}: "${trimmed.substring(0, 100)}"`,
+      metadata: { orderId: dispute.orderId, messageLength: trimmed.length },
+    });
 
     return {
       code: 200,
@@ -2817,16 +3093,44 @@ export const adminMutations = {
 
     const validStatuses = ["open", "under_review", "resolved", "closed"] as const;
     if (!validStatuses.includes(status)) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_SET_STATUS",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Failed to set dispute status: invalid status ${status}`,
+      });
       return { code: 400, success: false, message: "Invalid dispute status", dispute: null };
     }
 
     const walletsDB = getWalletsDB();
     const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
     if (!dispute) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_SET_STATUS",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Failed to set dispute status: dispute not found`,
+      });
       return { code: 404, success: false, message: "Dispute not found", dispute: null };
     }
 
     if (dispute.status === status) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_SET_STATUS",
+        status: "success",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Dispute already has status ${status} (no action taken)`,
+        metadata: { orderId: dispute.orderId, currentStatus: dispute.status },
+      });
       return {
         code: 200,
         success: true,
@@ -2852,6 +3156,18 @@ export const adminMutations = {
     );
 
     const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "DISPUTE_SET_STATUS",
+      status: "success",
+      targetType: "dispute",
+      targetId: disputeId,
+      details: `Admin set dispute status from ${dispute.status} to ${status}`,
+      changes: { status: { before: dispute.status, after: status } },
+      metadata: { orderId: dispute.orderId },
+    });
 
     return {
       code: 200,
@@ -2887,15 +3203,44 @@ export const adminMutations = {
 
     const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
     if (!dispute) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_RESOLVE",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: "Failed to resolve dispute: dispute not found",
+      });
       return { code: 404, success: false, message: "Dispute not found", dispute: null };
     }
 
     if (dispute.status === "resolved" || dispute.status === "closed") {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_RESOLVE",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Failed to resolve dispute: dispute is already ${dispute.status}`,
+        metadata: { currentStatus: dispute.status },
+      });
       return { code: 400, success: false, message: `Dispute is already ${dispute.status}`, dispute: null };
     }
 
     const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
     if (!order) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "DISPUTE_RESOLVE",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: "Failed to resolve dispute: associated order not found",
+        metadata: { orderId: dispute.orderId },
+      });
       return { code: 404, success: false, message: "Associated order not found", dispute: null };
     }
 
@@ -2948,6 +3293,17 @@ export const adminMutations = {
 
     const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
 
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "DISPUTE_RESOLVE",
+      status: "success",
+      targetType: "dispute",
+      targetId: disputeId,
+      details: `Admin resolved dispute in favor of seller: released funds to seller (${order.sellerId}), refund offers declined`,
+      metadata: { orderId: dispute.orderId, sellerId: order.sellerId, amount: order.amount },
+    });
+
     return {
       code: 200,
       success: true,
@@ -2984,19 +3340,58 @@ export const adminMutations = {
 
     const dispute = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
     if (!dispute) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "REFUND_BUYER",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: "Failed to refund buyer: dispute not found",
+      });
       return { code: 404, success: false, message: "Dispute not found", dispute: null };
     }
 
     if (dispute.status === "resolved" || dispute.status === "closed") {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "REFUND_BUYER",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: `Failed to refund buyer: dispute is already ${dispute.status}`,
+        metadata: { currentStatus: dispute.status },
+      });
       return { code: 400, success: false, message: `Dispute is already ${dispute.status}`, dispute: null };
     }
 
     const order = await walletsDB.collection<Order>("Orders").findOne({ orderId: dispute.orderId });
     if (!order) {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "REFUND_BUYER",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: "Failed to refund buyer: associated order not found",
+        metadata: { orderId: dispute.orderId },
+      });
       return { code: 404, success: false, message: "Associated order not found", dispute: null };
     }
 
     if (order.status === "refunded") {
+      await recordAdminLog({
+        adminId: context.user.userId,
+        adminType: "admin",
+        action: "REFUND_BUYER",
+        status: "failure",
+        targetType: "dispute",
+        targetId: disputeId,
+        details: "Failed to refund buyer: order already refunded",
+        metadata: { orderId: dispute.orderId },
+      });
       return { code: 400, success: false, message: "Order has already been refunded", dispute: null };
     }
 
@@ -3091,6 +3486,17 @@ export const adminMutations = {
     );
 
     const updated = await walletsDB.collection<Dispute>("Disputes").findOne({ disputeId });
+
+    await recordAdminLog({
+      adminId: context.user.userId,
+      adminType: "admin",
+      action: "REFUND_BUYER",
+      status: "success",
+      targetType: "dispute",
+      targetId: disputeId,
+      details: `Admin resolved dispute in favor of buyer (${order.buyerId}): refunded $${refundAmount}, deducted $${sellerDeduction} from seller (${order.sellerId}), declined pending refund offers`,
+      metadata: { orderId: dispute.orderId, buyerId: order.buyerId, sellerId: order.sellerId, refundAmount, sellerDeduction },
+    });
 
     return {
       code: 200,

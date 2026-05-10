@@ -32,9 +32,10 @@ All endpoints in this guide are shown with path-only format, for example:
 All protected merchant endpoints require these headers:
 
 - `x-merchant-api-key`
-- `x-merchant-timestamp`
-- `x-merchant-nonce`
-- `x-merchant-signature`
+- `Authorization: Bearer <token>`
+
+To get a token, call `POST /merchant/auth/check` with `apiKey` and `secret`.
+Tokens expire in 2 hours and should be re-issued from the same endpoint.
 
 Write operations for order fulfillment also require:
 

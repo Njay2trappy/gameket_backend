@@ -5,6 +5,7 @@ let client: MongoClient;
 let db: Db;
 let walletsDb: Db;
 let catalogsDb: Db;
+let logsDb: Db;
 
 const merchantBioTemplates = [
   "{{storeName}} is your trusted merchant store for instant digital delivery and dependable support.",
@@ -33,11 +34,21 @@ export async function connectDB(): Promise<Db> {
   db = client.db("Main");
   walletsDb = client.db("Wallets");
   catalogsDb = client.db("Catalogs");
+  logsDb = client.db("Logs");
 
-  await db.collection("AuditLogs").createIndex({ createdAt: -1 });
-  await db.collection("AuditLogs").createIndex({ eventName: 1, createdAt: -1 });
-  await db.collection("AuditLogs").createIndex({ actorId: 1, createdAt: -1 });
-  await db.collection("AuditLogs").createIndex({ targetId: 1, createdAt: -1 });
+  await logsDb.collection("AuditLogs").createIndex({ createdAt: -1 });
+  await logsDb.collection("AuditLogs").createIndex({ eventName: 1, createdAt: -1 });
+  await logsDb.collection("AuditLogs").createIndex({ actorId: 1, createdAt: -1 });
+  await logsDb.collection("AuditLogs").createIndex({ targetId: 1, createdAt: -1 });
+
+  // Create indexes for AdminLogs collection
+  await logsDb.collection("AdminLogs").createIndex({ createdAt: -1 });
+  await logsDb.collection("AdminLogs").createIndex({ adminId: 1, createdAt: -1 });
+  await logsDb.collection("AdminLogs").createIndex({ action: 1, createdAt: -1 });
+  await logsDb.collection("AdminLogs").createIndex({ targetType: 1, createdAt: -1 });
+  await logsDb.collection("AdminLogs").createIndex({ targetId: 1, createdAt: -1 });
+  await logsDb.collection("AdminLogs").createIndex({ adminType: 1, createdAt: -1 });
+
   const storesCollection = catalogsDb.collection("Stores");
   const expectedMerchantApiKeyFilter = { merchantApiKey: { $type: "string" } };
   const storeIndexes = await storesCollection.indexes();
@@ -422,6 +433,13 @@ export function getCatalogsDB(): Db {
     throw new Error("Database not initialized. Call connectDB() first.");
   }
   return catalogsDb;
+}
+
+export function getLogsDB(): Db {
+  if (!logsDb) {
+    throw new Error("Database not initialized. Call connectDB() first.");
+  }
+  return logsDb;
 }
 
 export async function closeDB(): Promise<void> {

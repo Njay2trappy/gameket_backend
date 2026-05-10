@@ -1,14 +1,20 @@
 import crypto from "crypto";
+import { readFileSync } from "fs";
+import jwt from "jsonwebtoken";
+import nodemailer from "nodemailer";
+import { join } from "path";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import { MongoServerError, type Filter } from "mongodb";
 import { allGroups } from "../../data/categories/index.js";
 import countryData from "../../data/country.json";
+import { recordAuditEvent } from "../audit.js";
 import { getCatalogsDB, getDB, getWalletsDB } from "../db.js";
 import { getRequestId, logger } from "../logger.js";
 import { decryptCodeOrPlain, encryptCode } from "../utils/codeCrypto.js";
 import type {
   Balance,
+  Deposit,
   MerchantIdempotencyRecord,
   MerchantRequestNonce,
   Order,
@@ -22,12 +28,25 @@ import type {
 
 const router = Router();
 
+const smtpTransporter = nodemailer.createTransport({
+  host: "gameket.io",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_EMAIL,
+    pass: process.env.SMTP_PASSWORD,
+  },
+});
+
 const MERCHANT_SIGNATURE_WINDOW_MS = Number(process.env.MERCHANT_SIGNATURE_WINDOW_MS || 5 * 60 * 60 * 1000);
 const MERCHANT_NONCE_TTL_MS = Number(process.env.MERCHANT_NONCE_TTL_MS || 10 * 60 * 1000);
+const MERCHANT_ACCESS_TOKEN_TTL_SECONDS = Number(process.env.MERCHANT_ACCESS_TOKEN_TTL_SECONDS || 2 * 60 * 60);
 const MERCHANT_RATE_LIMIT_WINDOW_MS = Number(process.env.MERCHANT_RATE_LIMIT_WINDOW_MS || 60 * 1000);
-const MERCHANT_RATE_LIMIT_MAX = Number(process.env.MERCHANT_RATE_LIMIT_MAX || 120);
-const MERCHANT_RATE_LIMIT_READ_MAX = Number(process.env.MERCHANT_RATE_LIMIT_READ_MAX || 240);
+const MERCHANT_RATE_LIMIT_MAX = Number(process.env.MERCHANT_RATE_LIMIT_MAX || 20);
+const MERCHANT_RATE_LIMIT_READ_MAX = Number(process.env.MERCHANT_RATE_LIMIT_READ_MAX || 20);
 const MERCHANT_RATE_LIMIT_WRITE_MAX = Number(process.env.MERCHANT_RATE_LIMIT_WRITE_MAX || MERCHANT_RATE_LIMIT_MAX);
+const MERCHANT_TOKEN_ISSUANCE_WINDOW_MS = Number(process.env.MERCHANT_TOKEN_ISSUANCE_WINDOW_MS || 60 * 60 * 1000); // 1 hour
+const MERCHANT_TOKEN_ISSUANCE_MAX = Number(process.env.MERCHANT_TOKEN_ISSUANCE_MAX || 2);
 const MERCHANT_ANOMALY_WINDOW_MS = Number(process.env.MERCHANT_ANOMALY_WINDOW_MS || 10 * 60 * 1000);
 const MERCHANT_ANOMALY_ALERT_THRESHOLD = Number(process.env.MERCHANT_ANOMALY_ALERT_THRESHOLD || 5);
 const MERCHANT_IDEMPOTENCY_TTL_MS = Number(process.env.MERCHANT_IDEMPOTENCY_TTL_MS || 24 * 60 * 60 * 1000);
@@ -36,6 +55,7 @@ const MERCHANT_IDEMPOTENCY_KEY_MIN_LENGTH = 8;
 const MERCHANT_IDEMPOTENCY_KEY_MAX_LENGTH = 128;
 
 const merchantRateLimitState = new Map<string, { windowStart: number; count: number }>();
+const merchantTokenIssuanceState = new Map<string, { windowStart: number; count: number }>();
 const merchantAnomalyState = new Map<string, { windowStart: number; count: number }>();
 
 type MerchantRateLimitBucket = "read" | "write";
@@ -75,6 +95,472 @@ function getRankFromSales(totalSales: number): number {
   return 1;
 }
 
+const escapeHtml = (value: string): string => value
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/\"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
+const formatUsd = (amount: number): string => {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+};
+
+const formatDateTime = (iso: string): string => {
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+};
+
+const shouldSendEmailForUser = (user: User): boolean => {
+  return (user.deliveryOption || "email") === "email";
+};
+
+const renderIfBlock = (template: string, key: string, include: boolean): string => {
+  const blockRegex = new RegExp(`\\{\\{#if\\s+${key}\\}\\}([\\s\\S]*?)\\{\\{\\/if\\}\\}`, "g");
+  return template.replace(blockRegex, include ? "$1" : "");
+};
+
+const renderOrderSummaryEmail = (
+  buyerName: string,
+  input: {
+    orderId: string;
+    orderDate: string;
+    paymentMethod: string;
+    orderStatus: string;
+    productName: string;
+    quantity: number;
+    amount: number;
+    fee: number;
+    totalAmount: number;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "order-summary-email.html"), "utf-8");
+  const firstName = buyerName.trim() || "there";
+
+  const itemBlockRegex = /\{\{#each items\}\}([\s\S]*?)\{\{\/each\}\}/g;
+  const itemBlockMatch = itemBlockRegex.exec(template);
+  if (itemBlockMatch) {
+    const itemBlock = itemBlockMatch[1];
+
+    const renderedItem = itemBlock
+      .replace(/\{\{name\}\}/g, escapeHtml(input.productName))
+      .replace(/\{\{description\}\}/g, "Digital code order")
+      .replace(/\{\{quantity\}\}/g, String(input.quantity))
+      .replace(/\{\{price\}\}/g, escapeHtml(formatUsd(input.amount)));
+
+    template = template.replace(itemBlockRegex, renderedItem);
+  }
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{orderDate\}\}/g, escapeHtml(formatDateTime(input.orderDate)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
+    .replace(/\{\{orderStatus\}\}/g, escapeHtml(input.orderStatus))
+    .replace(/\{\{subtotal\}\}/g, escapeHtml(formatUsd(input.amount)))
+    .replace(/\{\{processingFee\}\}/g, escapeHtml(formatUsd(input.fee)))
+    .replace(/\{\{discount\}\}/g, escapeHtml(formatUsd(0)))
+    .replace(/\{\{grandTotal\}\}/g, escapeHtml(formatUsd(input.totalAmount)))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderStoreManualFulfilledOrderEmail = (
+  sellerName: string,
+  input: {
+    orderId: string;
+    productName: string;
+    quantity: number;
+    buyerTag: string;
+    fulfilledOn: string;
+    orderAmount: number;
+    netEarnings: number;
+    payoutStatus: string;
+    expectedPayoutDate: string;
+  }
+): string => {
+  const template = readFileSync(join(process.cwd(), "src", "emails", "store-manual-order-fulfilled-email.html"), "utf-8");
+  const firstName = sellerName.trim() || "there";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{buyerTag\}\}/g, escapeHtml(input.buyerTag))
+    .replace(/\{\{fulfilledOn\}\}/g, escapeHtml(formatDateTime(input.fulfilledOn)))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{netEarnings\}\}/g, escapeHtml(formatUsd(input.netEarnings)))
+    .replace(/\{\{payoutStatus\}\}/g, escapeHtml(input.payoutStatus))
+    .replace(/\{\{expectedPayoutDate\}\}/g, escapeHtml(input.expectedPayoutDate))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderBuyerManualFulfilledOrderEmail = (
+  buyerName: string,
+  input: {
+    orderId: string;
+    fulfilledOn: string;
+    storeName: string;
+    productName: string;
+    quantity: number;
+    orderAmount: number;
+    paymentMethod: string;
+    codes: string[];
+    fulfillmentNote?: string | null;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "buyer-manual-order-fulfilled-email.html"), "utf-8");
+  const firstName = buyerName.trim() || "there";
+  const cleanCodes = input.codes.map((code) => code.trim()).filter((code) => code.length > 0);
+
+  template = template.replace(/\{\{#if purchasedCodes\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length <= 1) return "";
+    return block.replace(/\{\{#each purchasedCodes\}\}([\s\S]*?)\{\{\/each\}\}/g, (_eachFull, eachBlock: string) => {
+      return cleanCodes.map((code) => eachBlock.replace(/\{\{this\}\}/g, escapeHtml(code))).join("");
+    });
+  });
+
+  template = template.replace(/\{\{#if purchasedCode\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length !== 1) return "";
+    return block.replace(/\{\{purchasedCode\}\}/g, escapeHtml(cleanCodes[0]));
+  });
+
+  template = renderIfBlock(template, "fulfillmentNote", Boolean((input.fulfillmentNote || "").trim()));
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{fulfilledOn\}\}/g, escapeHtml(formatDateTime(input.fulfilledOn)))
+    .replace(/\{\{storeName\}\}/g, escapeHtml(input.storeName))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
+    .replace(/\{\{fulfillmentNote\}\}/g, escapeHtml((input.fulfillmentNote || "").trim()))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderGuestAutomaticOrderEmail = (
+  input: {
+    orderId: string;
+    orderDate: string;
+    deliveredOn: string;
+    productName: string;
+    codes: string[];
+    quantity: number;
+    totalAmount: number;
+    paymentMethod: string;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "guest-automatic-order-email.html"), "utf-8");
+  const cleanCodes = input.codes.filter((value) => value.trim().length > 0);
+
+  template = template.replace(/\{\{#if purchasedCodes\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length <= 1) return "";
+    return block.replace(/\{\{#each purchasedCodes\}\}([\s\S]*?)\{\{\/each\}\}/g, (_eachFull, eachBlock: string) => {
+      return cleanCodes.map((code) => eachBlock.replace(/\{\{this\}\}/g, escapeHtml(code))).join("");
+    });
+  });
+
+  template = template.replace(/\{\{#if purchasedCode\}\}([\s\S]*?)\{\{\/if\}\}/g, (_full, block: string) => {
+    if (cleanCodes.length !== 1) return "";
+    return block.replace(/\{\{purchasedCode\}\}/g, escapeHtml(cleanCodes[0]));
+  });
+
+  return template
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{orderDate\}\}/g, escapeHtml(formatDateTime(input.orderDate)))
+    .replace(/\{\{deliveredOn\}\}/g, escapeHtml(formatDateTime(input.deliveredOn)))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderTotal\}\}/g, escapeHtml(formatUsd(input.totalAmount)))
+    .replace(/\{\{paymentMethod\}\}/g, escapeHtml(input.paymentMethod))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const renderOrderStatusUpdateEmail = (
+  firstName: string,
+  input: {
+    status: "disputed" | "cancelled" | "refunded";
+    orderId: string;
+    productName: string;
+    quantity: number;
+    orderAmount: number;
+    updatedOn: string;
+    statusReason?: string | null;
+    refundAmount?: number;
+  }
+): string => {
+  let template = readFileSync(join(process.cwd(), "src", "emails", "order-status-update-email.html"), "utf-8");
+
+  const isDisputed = input.status === "disputed";
+  const isCancelled = input.status === "cancelled";
+  const isRefunded = input.status === "refunded";
+
+  template = renderIfBlock(template, "isDisputed", isDisputed);
+  template = renderIfBlock(template, "isCancelled", isCancelled);
+  template = renderIfBlock(template, "isRefunded", isRefunded);
+  template = renderIfBlock(template, "statusReason", Boolean((input.statusReason || "").trim()));
+
+  const statusHeadline = isDisputed
+    ? "Order Disputed"
+    : isCancelled
+      ? "Order Cancelled"
+      : "Order Refunded";
+
+  return template
+    .replace(/\{\{firstName\}\}/g, escapeHtml(firstName))
+    .replace(/\{\{statusHeadline\}\}/g, escapeHtml(statusHeadline))
+    .replace(/\{\{orderId\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{productName\}\}/g, escapeHtml(input.productName))
+    .replace(/\{\{quantity\}\}/g, String(input.quantity))
+    .replace(/\{\{orderAmount\}\}/g, escapeHtml(formatUsd(input.orderAmount)))
+    .replace(/\{\{updatedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{statusReason\}\}/g, escapeHtml((input.statusReason || "").trim()))
+    .replace(/\{\{disputeUrl\}\}/g, escapeHtml(`https://shop.gameket.io/orders?id=${encodeURIComponent(input.orderId)}`))
+    .replace(/\{\{browseUrl\}\}/g, escapeHtml("https://shop.gameket.io"))
+    .replace(/\{\{transactionsUrl\}\}/g, escapeHtml("https://shop.gameket.io/dashboard/transactions"))
+    .replace(/\{\{refundAmount\}\}/g, escapeHtml(formatUsd(input.refundAmount ?? input.orderAmount)))
+    .replace(/\{\{refundedOn\}\}/g, escapeHtml(formatDateTime(input.updatedOn)))
+    .replace(/\{\{refundMethod\}\}/g, "Wallet Balance")
+    .replace(/\{\{refundReference\}\}/g, escapeHtml(input.orderId))
+    .replace(/\{\{year\}\}/g, String(new Date().getFullYear()));
+};
+
+const sendMerchantCompletionEmails = async (input: {
+  db: ReturnType<typeof getDB>;
+  walletsDB: ReturnType<typeof getWalletsDB>;
+  order: Order;
+  product: Product;
+  store: Store;
+  sellerUser: User | null;
+  fulfilledAt: string;
+  fulfilmentNote: string;
+  deliveredCodes: string[];
+}): Promise<void> => {
+  const { db, walletsDB, order, product, store, sellerUser, fulfilledAt, fulfilmentNote, deliveredCodes } = input;
+  const isManual = product.type === "Manual";
+
+  try {
+    const mailTasks: Array<Promise<unknown>> = [];
+
+    if (isManual && sellerUser && shouldSendEmailForUser(sellerUser)) {
+      const sellerHtml = renderStoreManualFulfilledOrderEmail(sellerUser.username, {
+        orderId: order.orderId,
+        productName: product.name,
+        quantity: order.quantity,
+        buyerTag: order.buyerName || "Buyer",
+        fulfilledOn: fulfilledAt,
+        orderAmount: order.totalAmount,
+        netEarnings: order.amount,
+        payoutStatus: "Pending Release",
+        expectedPayoutDate: formatDateTime(order.releasedAt),
+      });
+
+      mailTasks.push(
+        smtpTransporter.sendMail({
+          from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+          to: sellerUser.email,
+          subject: "Manual Order Fulfilled",
+          html: sellerHtml,
+        })
+      );
+    }
+
+    if (order.buyerId === "anon-gameket-id") {
+      const guestDeposit = await walletsDB.collection<Deposit>("Deposits").findOne({ orderId: order.orderId });
+      if (guestDeposit?.userId) {
+        if (isManual) {
+          const guestSummaryHtml = renderOrderSummaryEmail(order.buyerName || "Guest", {
+            orderId: order.orderId,
+            orderDate: order.createdAt,
+            paymentMethod: guestDeposit.paymentMethod || "Webcheckout",
+            orderStatus: "Completed",
+            productName: product.name,
+            quantity: order.quantity,
+            amount: order.amount,
+            fee: order.fee,
+            totalAmount: order.totalAmount,
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: guestDeposit.userId,
+              subject: "Your Manual Order Summary",
+              html: guestSummaryHtml,
+            })
+          );
+        } else {
+          const guestHtml = renderGuestAutomaticOrderEmail({
+            orderId: order.orderId,
+            orderDate: order.createdAt,
+            deliveredOn: fulfilledAt,
+            productName: product.name,
+            codes: deliveredCodes,
+            quantity: order.quantity,
+            totalAmount: order.totalAmount,
+            paymentMethod: guestDeposit.paymentMethod || "Webcheckout",
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: guestDeposit.userId,
+              subject: "Guest Order Completed",
+              html: guestHtml,
+            })
+          );
+        }
+      }
+    } else {
+      const buyer = await db.collection<User>("users").findOne({ id: order.buyerId });
+      if (buyer && shouldSendEmailForUser(buyer)) {
+        if (isManual) {
+          const buyerHtml = renderBuyerManualFulfilledOrderEmail(buyer.username, {
+            orderId: order.orderId,
+            fulfilledOn: fulfilledAt,
+            storeName: store.storeName || "Store",
+            productName: product.name,
+            quantity: order.quantity,
+            orderAmount: order.totalAmount,
+            paymentMethod: "Wallet Balance",
+            codes: deliveredCodes,
+            fulfillmentNote: fulfilmentNote,
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: buyer.email,
+              subject: "Manual Order Fulfilled",
+              html: buyerHtml,
+            })
+          );
+        } else {
+          const buyerHtml = renderOrderSummaryEmail(buyer.username, {
+            orderId: order.orderId,
+            orderDate: order.createdAt,
+            paymentMethod: "Wallet Balance",
+            orderStatus: "Completed",
+            productName: product.name,
+            quantity: order.quantity,
+            amount: order.amount,
+            fee: order.fee,
+            totalAmount: order.totalAmount,
+          });
+
+          mailTasks.push(
+            smtpTransporter.sendMail({
+              from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+              to: buyer.email,
+              subject: "Your Order Summary",
+              html: buyerHtml,
+            })
+          );
+        }
+      }
+    }
+
+    await Promise.allSettled(mailTasks);
+  } catch (error) {
+    logger.error({ err: error, orderId: order.orderId }, "Failed to send merchant completion emails");
+  }
+};
+
+const sendMerchantRefundEmails = async (input: {
+  db: ReturnType<typeof getDB>;
+  walletsDB: ReturnType<typeof getWalletsDB>;
+  order: Order;
+  product: Product;
+  refundedAt: string;
+  refundAmount: number;
+}): Promise<void> => {
+  const { db, walletsDB, order, product, refundedAt, refundAmount } = input;
+
+  try {
+    const mailTasks: Array<Promise<unknown>> = [];
+
+    if (order.buyerId === "anon-gameket-id") {
+      const guestDeposit = await walletsDB.collection<Deposit>("Deposits").findOne({ orderId: order.orderId });
+      if (guestDeposit?.userId) {
+        const guestHtml = renderOrderStatusUpdateEmail(order.buyerName || "Guest", {
+          status: "refunded",
+          orderId: order.orderId,
+          productName: product.name,
+          quantity: order.quantity,
+          orderAmount: order.totalAmount,
+          updatedOn: refundedAt,
+          refundAmount: refundAmount,
+        });
+
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+            to: guestDeposit.userId,
+            subject: "Order Status Updated",
+            html: guestHtml,
+          })
+        );
+      }
+    } else {
+      const buyer = await db.collection<User>("users").findOne({ id: order.buyerId });
+      if (buyer && shouldSendEmailForUser(buyer)) {
+        const buyerHtml = renderOrderStatusUpdateEmail(buyer.username, {
+          status: "refunded",
+          orderId: order.orderId,
+          productName: product.name,
+          quantity: order.quantity,
+          orderAmount: order.totalAmount,
+          updatedOn: refundedAt,
+          refundAmount: refundAmount,
+        });
+
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+            to: buyer.email,
+            subject: "Order Status Updated",
+            html: buyerHtml,
+          })
+        );
+      }
+
+      const seller = await db.collection<User>("users").findOne({ id: order.sellerId });
+      if (seller && shouldSendEmailForUser(seller)) {
+        const sellerHtml = renderOrderStatusUpdateEmail(seller.username, {
+          status: "refunded",
+          orderId: order.orderId,
+          productName: product.name,
+          quantity: order.quantity,
+          orderAmount: order.totalAmount,
+          updatedOn: refundedAt,
+          refundAmount: refundAmount,
+        });
+
+        mailTasks.push(
+          smtpTransporter.sendMail({
+            from: `GAMEKET <${process.env.SMTP_EMAIL}>`,
+            to: seller.email,
+            subject: "Order Status Updated",
+            html: sellerHtml,
+          })
+        );
+      }
+    }
+
+    await Promise.allSettled(mailTasks);
+  } catch (error) {
+    logger.error({ err: error, orderId: order.orderId }, "Failed to send merchant refund emails");
+  }
+};
+
 const getClientIp = (req: Request): string => {
   const forwarded = req.headers["x-forwarded-for"];
   if (Array.isArray(forwarded)) {
@@ -84,6 +570,28 @@ const getClientIp = (req: Request): string => {
     return forwarded.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
   }
   return req.socket.remoteAddress || "unknown";
+};
+
+const getMerchantJwtSecret = (): string => {
+  const secret = process.env.MERCHANT_JWT_SECRET?.trim();
+  if (!secret) {
+    throw new Error("MERCHANT_JWT_SECRET is not configured");
+  }
+  return secret;
+};
+
+const getBearerToken = (req: Request): string => {
+  const authHeader = req.header("authorization")?.trim() || "";
+  if (!authHeader.toLowerCase().startsWith("bearer ")) {
+    return "";
+  }
+  return authHeader.slice(7).trim();
+};
+
+const secureSecretMatch = (providedSecret: string, expectedSecret: string): boolean => {
+  const providedHash = crypto.createHash("sha256").update(providedSecret).digest();
+  const expectedHash = crypto.createHash("sha256").update(expectedSecret).digest();
+  return crypto.timingSafeEqual(providedHash, expectedHash);
 };
 
 const stableStringify = (value: unknown): string => {
@@ -183,6 +691,55 @@ const normalizeRequestPath = (req: Request): string => {
   return rawPath;
 };
 
+const getCanonicalRequestTarget = (req: Request): string => {
+  const path = normalizeRequestPath(req);
+  const queryIndex = req.originalUrl.indexOf("?");
+
+  if (queryIndex === -1) {
+    return path;
+  }
+
+  const rawQuery = req.originalUrl.slice(queryIndex + 1);
+  if (!rawQuery) {
+    return path;
+  }
+
+  const sortedEntries = [...new URLSearchParams(rawQuery).entries()]
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+      if (leftKey === rightKey) {
+        return leftValue.localeCompare(rightValue);
+      }
+
+      return leftKey.localeCompare(rightKey);
+    });
+
+  if (sortedEntries.length === 0) {
+    return path;
+  }
+
+  const canonicalQuery = new URLSearchParams();
+  for (const [key, value] of sortedEntries) {
+    canonicalQuery.append(key, value);
+  }
+
+  return `${path}?${canonicalQuery.toString()}`;
+};
+
+const getQueryStringValue = (req: Request, key: string): string => {
+  const rawValue = req.query[key];
+
+  if (typeof rawValue === "string") {
+    return rawValue.trim();
+  }
+
+  if (Array.isArray(rawValue)) {
+    const firstString = rawValue.find((value) => typeof value === "string" && value.trim().length > 0);
+    return typeof firstString === "string" ? firstString.trim() : "";
+  }
+
+  return "";
+};
+
 const getMerchantIdempotencyKey = (req: Request): string => {
   const standardHeader = req.header("idempotency-key")?.trim();
   if (standardHeader) {
@@ -195,32 +752,37 @@ const getMerchantIdempotencyKey = (req: Request): string => {
 const getMerchantIdempotencyOperation = (req: Request): string | null => {
   const method = req.method.toUpperCase();
   const path = normalizeRequestPath(req);
+  const orderId = getQueryStringValue(req, "orderId");
 
-  const codesMatch = path.match(/^\/merchant\/orders\/([^/]+)\/codes$/);
-  if ((method === "POST" || method === "PATCH") && codesMatch) {
-    return `order_codes:${codesMatch[1]}`;
+  if ((method === "POST" || method === "PATCH") && path === "/merchant/orders/codes" && orderId) {
+    return `order_codes:${orderId}`;
   }
 
-  const completeMatch = path.match(/^\/merchant\/orders\/([^/]+)\/complete$/);
-  if (method === "POST" && completeMatch) {
-    return `order_complete:${completeMatch[1]}`;
+  if (method === "POST" && path === "/merchant/orders/complete" && orderId) {
+    return `order_complete:${orderId}`;
   }
 
-  const refundMatch = path.match(/^\/merchant\/orders\/([^/]+)\/refund$/);
-  if (method === "POST" && refundMatch) {
-    return `order_refund:${refundMatch[1]}`;
+  if (method === "POST" && path === "/merchant/orders/refund" && orderId) {
+    return `order_refund:${orderId}`;
   }
 
-  const orderUpdateMatch = path.match(/^\/merchant\/orders\/([^/]+)$/);
-  if ((method === "PATCH" || method === "PUT") && orderUpdateMatch) {
+  if (method === "POST" && path === "/merchant/orders/cancel" && orderId) {
+    return `order_cancel:${orderId}`;
+  }
+
+  if ((method === "PATCH" || method === "PUT") && path === "/merchant/orders" && orderId) {
     const statusRaw = typeof req.body?.status === "string" ? req.body.status.trim().toLowerCase() : "";
 
     if (statusRaw === "complete" || statusRaw === "completed") {
-      return `order_complete:${orderUpdateMatch[1]}`;
+      return `order_complete:${orderId}`;
     }
 
     if (statusRaw === "refund" || statusRaw === "refunded") {
-      return `order_refund:${orderUpdateMatch[1]}`;
+      return `order_refund:${orderId}`;
+    }
+
+    if (statusRaw === "cancel" || statusRaw === "cancelled") {
+      return `order_cancel:${orderId}`;
     }
   }
 
@@ -554,6 +1116,49 @@ const enforceMerchantRateLimit = (
   return toResponse(state.count, true, state.windowStart);
 };
 
+const enforceTokenIssuanceRateLimit = (
+  merchantApiKey: string,
+  req: Request
+): {
+  allowed: boolean;
+  retryAfterSeconds: number;
+  limit: number;
+  remaining: number;
+  resetAt: string;
+} => {
+  const keyHash = sha256Hex(merchantApiKey).slice(0, 24);
+  const stateKey = `token:${keyHash}`;
+  const now = Date.now();
+  const state = merchantTokenIssuanceState.get(stateKey);
+  const limit = MERCHANT_TOKEN_ISSUANCE_MAX;
+
+  const toResponse = (count: number, allowed: boolean, windowStart: number) => {
+    const retryAfterMs = Math.max(0, MERCHANT_TOKEN_ISSUANCE_WINDOW_MS - (now - windowStart));
+    return {
+      allowed,
+      retryAfterSeconds: allowed ? 0 : Math.ceil(retryAfterMs / 1000),
+      limit,
+      remaining: Math.max(limit - count, 0),
+      resetAt: new Date(windowStart + MERCHANT_TOKEN_ISSUANCE_WINDOW_MS).toISOString(),
+    };
+  };
+
+  if (!state || now - state.windowStart >= MERCHANT_TOKEN_ISSUANCE_WINDOW_MS) {
+    const nextState = { windowStart: now, count: 1 };
+    merchantTokenIssuanceState.set(stateKey, nextState);
+    return toResponse(nextState.count, true, nextState.windowStart);
+  }
+
+  state.count += 1;
+  merchantTokenIssuanceState.set(stateKey, state);
+
+  if (state.count > limit) {
+    return toResponse(state.count, false, state.windowStart);
+  }
+
+  return toResponse(state.count, true, state.windowStart);
+};
+
 const consumeMerchantNonce = async (storeId: string, nonce: string, timestampMs: number): Promise<boolean> => {
   const nowIso = new Date().toISOString();
   const ttlBaseTime = Math.max(Date.now(), timestampMs);
@@ -585,15 +1190,11 @@ const authenticateMerchantRequest = async (
   const clientIp = getClientIp(req);
 
   const apiKey = req.header("x-merchant-api-key")?.trim() || "";
-  const timestampHeader = req.header("x-merchant-timestamp")?.trim() || "";
-  const nonce = req.header("x-merchant-nonce")?.trim() || "";
-  const signatureHeader = req.header("x-merchant-signature")?.trim() || "";
+  const accessToken = getBearerToken(req);
 
   const missingHeaders: string[] = [];
   if (!apiKey) missingHeaders.push("x-merchant-api-key");
-  if (!timestampHeader) missingHeaders.push("x-merchant-timestamp");
-  if (!nonce) missingHeaders.push("x-merchant-nonce");
-  if (!signatureHeader) missingHeaders.push("x-merchant-signature");
+  if (!accessToken) missingHeaders.push("authorization: Bearer <token>");
 
   if (missingHeaders.length > 0) {
     recordMerchantAnomaly("unknown", "missing_headers", {
@@ -629,6 +1230,52 @@ const authenticateMerchantRequest = async (
     return;
   }
 
+  let decoded: jwt.JwtPayload;
+  try {
+    const verified = jwt.verify(accessToken, getMerchantJwtSecret());
+    if (typeof verified === "string") {
+      throw new Error("Invalid token payload");
+    }
+    decoded = verified;
+  } catch (error) {
+    const reason = error instanceof Error && error.name === "TokenExpiredError"
+      ? "token_expired"
+      : "invalid_token";
+
+    recordMerchantAnomaly(store.storeId, reason, {
+      requestId,
+      clientIp,
+      path: req.originalUrl,
+    });
+
+    res.status(401).json({
+      success: false,
+      message: reason === "token_expired" ? "Merchant access token expired" : "Invalid merchant access token",
+      requestId,
+    });
+    return;
+  }
+
+  const expectedApiKeyHash = sha256Hex(apiKey);
+  const tokenStoreId = typeof decoded.storeId === "string" ? decoded.storeId : "";
+  const tokenApiKeyHash = typeof decoded.apiKeyHash === "string" ? decoded.apiKeyHash : "";
+  const tokenType = typeof decoded.type === "string" ? decoded.type : "";
+
+  if (tokenType !== "merchant_access" || tokenStoreId !== store.storeId || tokenApiKeyHash !== expectedApiKeyHash) {
+    recordMerchantAnomaly(store.storeId, "token_context_mismatch", {
+      requestId,
+      clientIp,
+      path: req.originalUrl,
+    });
+
+    res.status(401).json({
+      success: false,
+      message: "Merchant access token does not match API key",
+      requestId,
+    });
+    return;
+  }
+
   const rateLimit = enforceMerchantRateLimit(apiKey, req);
   res.setHeader("x-ratelimit-policy", `api-key:${rateLimit.bucket}`);
   res.setHeader("x-ratelimit-limit", String(rateLimit.limit));
@@ -656,102 +1303,6 @@ const authenticateMerchantRequest = async (
     return;
   }
 
-  const timestampMs = parseTimestampMs(timestampHeader);
-  if (!Number.isFinite(timestampMs)) {
-    recordMerchantAnomaly(store.storeId, "invalid_timestamp", {
-      requestId,
-      clientIp,
-      timestampHeader,
-      path: req.originalUrl,
-    });
-
-    res.status(401).json({
-      success: false,
-      message: "Invalid merchant timestamp",
-      requestId,
-    });
-    return;
-  }
-
-  const now = Date.now();
-  if (Math.abs(now - timestampMs) > MERCHANT_SIGNATURE_WINDOW_MS) {
-    recordMerchantAnomaly(store.storeId, "timestamp_out_of_window", {
-      requestId,
-      clientIp,
-      timestampHeader,
-      path: req.originalUrl,
-    });
-
-    res.status(401).json({
-      success: false,
-      message: "Merchant timestamp is outside the allowed window",
-      requestId,
-    });
-    return;
-  }
-
-  if (nonce.length < 16 || nonce.length > 128) {
-    recordMerchantAnomaly(store.storeId, "invalid_nonce_format", {
-      requestId,
-      clientIp,
-      nonceLength: nonce.length,
-      path: req.originalUrl,
-    });
-
-    res.status(401).json({
-      success: false,
-      message: "Invalid merchant nonce",
-      requestId,
-    });
-    return;
-  }
-
-  const normalizedBody = stableStringify(req.body ?? {});
-  const bodyHash = sha256Hex(normalizedBody);
-  const signingPayload = buildSigningPayload(
-    req.method,
-    req.originalUrl.split("?")[0] || req.path,
-    timestampHeader,
-    nonce,
-    bodyHash
-  );
-
-  const expectedSignature = hmacSha256Hex(store.merchantSecret, signingPayload);
-  const providedSignature = normalizeSignature(signatureHeader);
-
-  if (!secureSignatureMatch(providedSignature, expectedSignature)) {
-    recordMerchantAnomaly(store.storeId, "invalid_signature", {
-      requestId,
-      clientIp,
-      path: req.originalUrl,
-      bodyHash,
-    });
-
-    res.status(401).json({
-      success: false,
-      message: "Invalid merchant signature",
-      requestId,
-    });
-    return;
-  }
-
-  const nonceAccepted = await consumeMerchantNonce(store.storeId, nonce, timestampMs);
-  if (!nonceAccepted) {
-    recordMerchantAnomaly(store.storeId, "nonce_replay_detected", {
-      requestId,
-      clientIp,
-      nonce,
-      path: req.originalUrl,
-    });
-
-    res.status(409).json({
-      success: false,
-      message: "Replay detected: merchant nonce has already been used",
-      requestId,
-    });
-    return;
-  }
-
   req.merchantStore = store;
 
   const idempotencyHandled = await enforceMerchantIdempotency(req, res, store);
@@ -764,32 +1315,109 @@ const authenticateMerchantRequest = async (
 
 router.post(
   "/merchant/auth/check",
-  async (req, res, next) => {
+  async (req, res) => {
+    const requestId = getRequestId(req);
+    const clientIp = getClientIp(req);
+
     try {
-      await authenticateMerchantRequest(req as MerchantAuthenticatedRequest, res, next);
+      const apiKey = typeof req.body?.apiKey === "string"
+        ? req.body.apiKey.trim()
+        : (req.header("x-merchant-api-key")?.trim() || "");
+      const secret = typeof req.body?.secret === "string" ? req.body.secret : "";
+
+      if (!apiKey || !secret) {
+        res.status(400).json({
+          success: false,
+          message: "apiKey and secret are required",
+          requestId,
+        });
+        return;
+      }
+
+      const catalogsDB = getCatalogsDB();
+      const store = await catalogsDB.collection<Store>("Stores").findOne({ merchantApiKey: apiKey });
+
+      if (!store || store.type !== "merchant" || !store.isActive || !store.merchantSecret) {
+        recordMerchantAnomaly(apiKey.slice(0, 12) || "unknown", "invalid_token_issue_credentials", {
+          requestId,
+          clientIp,
+          path: req.originalUrl,
+        });
+
+        res.status(401).json({
+          success: false,
+          message: "Invalid merchant credentials",
+          requestId,
+        });
+        return;
+      }
+
+      const rateLimit = enforceTokenIssuanceRateLimit(apiKey, req);
+      res.setHeader("x-ratelimit-policy", "token-issuance");
+      res.setHeader("x-ratelimit-limit", String(rateLimit.limit));
+      res.setHeader("x-ratelimit-remaining", String(rateLimit.remaining));
+      res.setHeader("x-ratelimit-reset", rateLimit.resetAt);
+
+      if (!rateLimit.allowed) {
+        res.setHeader("retry-after", String(rateLimit.retryAfterSeconds));
+        res.status(429).json({
+          success: false,
+          message: "Too many merchant requests",
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+          requestId,
+        });
+        return;
+      }
+
+      if (!secureSecretMatch(secret, store.merchantSecret)) {
+        recordMerchantAnomaly(store.storeId, "invalid_token_issue_secret", {
+          requestId,
+          clientIp,
+          path: req.originalUrl,
+        });
+
+        res.status(401).json({
+          success: false,
+          message: "Invalid merchant credentials",
+          requestId,
+        });
+        return;
+      }
+
+      const issuedAtMs = Date.now();
+      const expiresAtMs = issuedAtMs + (MERCHANT_ACCESS_TOKEN_TTL_SECONDS * 1000);
+      const token = jwt.sign(
+        {
+          type: "merchant_access",
+          storeId: store.storeId,
+          apiKeyHash: sha256Hex(apiKey),
+        },
+        getMerchantJwtSecret(),
+        { expiresIn: MERCHANT_ACCESS_TOKEN_TTL_SECONDS }
+      );
+
+      res.status(200).json({
+        success: true,
+        message: "Merchant access token issued",
+        token,
+        tokenType: "Bearer",
+        expiresInSeconds: MERCHANT_ACCESS_TOKEN_TTL_SECONDS,
+        expiresAt: new Date(expiresAtMs).toISOString(),
+        merchant: {
+          storeId: store.storeId,
+          storeName: store.storeName,
+        },
+        serverTime: new Date(issuedAtMs).toISOString(),
+        requestId,
+      });
     } catch (error) {
       logger.error({ err: error, requestId: getRequestId(req) }, "Failed to authenticate merchant request");
       res.status(500).json({
         success: false,
-        message: "Merchant authentication failed",
+        message: "Merchant token issuance failed",
         requestId: getRequestId(req),
       });
     }
-  },
-  (req, res) => {
-    const merchantReq = req as MerchantAuthenticatedRequest;
-    const store = merchantReq.merchantStore!;
-
-    res.status(200).json({
-      success: true,
-      message: "Merchant request authenticated",
-      merchant: {
-        storeId: store.storeId,
-        storeName: store.storeName,
-      },
-      serverTime: new Date().toISOString(),
-      requestId: getRequestId(req),
-    });
   }
 );
 
@@ -871,6 +1499,31 @@ router.get("/merchant/products", requireMerchantAuth, async (req, res) => {
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (productId) {
+      const product = await getCatalogsDB().collection<Product>("Products").findOne({
+        productId,
+        userId: store.userId,
+      });
+
+      if (!product) {
+        res.status(404).json({
+          success: false,
+          message: "Product not found or does not belong to this merchant",
+          requestId,
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Product fetched successfully",
+        product: mapProductForResponse(product),
+        requestId,
+      });
+      return;
+    }
 
     const typeQuery = typeof req.query.type === "string" ? req.query.type.trim() : "";
     if (typeQuery && typeQuery !== "Auto" && typeQuery !== "Manual") {
@@ -979,51 +1632,22 @@ router.get("/merchant/products", requireMerchantAuth, async (req, res) => {
   }
 });
 
-router.get("/merchant/products/:productId", requireMerchantAuth, async (req, res) => {
-  const requestId = getRequestId(req);
-
-  try {
-    const merchantReq = req as MerchantAuthenticatedRequest;
-    const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
-
-    const product = await getCatalogsDB().collection<Product>("Products").findOne({
-      productId,
-      userId: store.userId,
-    });
-
-    if (!product) {
-      res.status(404).json({
-        success: false,
-        message: "Product not found or does not belong to this merchant",
-        requestId,
-      });
-      return;
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Product fetched successfully",
-      product: mapProductForResponse(product),
-      requestId,
-    });
-  } catch (error) {
-    logger.error({ err: error, requestId }, "Failed to fetch merchant product details");
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch merchant product details",
-      requestId,
-    });
-  }
-});
-
 const updateMerchantProductHandler = async (req: Request, res: Response): Promise<void> => {
   const requestId = getRequestId(req);
 
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (!productId) {
+      res.status(400).json({
+        success: false,
+        message: "productId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const catalogsDB = getCatalogsDB();
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId: store.userId });
@@ -1220,16 +1844,25 @@ const updateMerchantProductHandler = async (req: Request, res: Response): Promis
   }
 };
 
-router.patch("/merchant/products/:productId", requireMerchantAuth, updateMerchantProductHandler);
-router.put("/merchant/products/:productId", requireMerchantAuth, updateMerchantProductHandler);
+router.patch("/merchant/products", requireMerchantAuth, updateMerchantProductHandler);
+router.put("/merchant/products", requireMerchantAuth, updateMerchantProductHandler);
 
-router.delete("/merchant/products/:productId", requireMerchantAuth, async (req, res) => {
+router.delete("/merchant/products", requireMerchantAuth, async (req, res) => {
   const requestId = getRequestId(req);
 
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (!productId) {
+      res.status(400).json({
+        success: false,
+        message: "productId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const catalogsDB = getCatalogsDB();
     const product = await catalogsDB.collection<Product>("Products").findOne({ productId, userId: store.userId });
@@ -1266,13 +1899,22 @@ router.delete("/merchant/products/:productId", requireMerchantAuth, async (req, 
   }
 });
 
-router.patch("/merchant/products/:productId/callback-url", requireMerchantAuth, async (req, res) => {
+router.patch("/merchant/products/callback-url", requireMerchantAuth, async (req, res) => {
   const requestId = getRequestId(req);
 
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (!productId) {
+      res.status(400).json({
+        success: false,
+        message: "productId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const callbackInput = typeof req.body?.callbackurl === "string"
       ? req.body.callbackurl
@@ -1495,13 +2137,22 @@ router.post("/merchant/products", requireMerchantAuth, async (req, res) => {
   }
 });
 
-router.patch("/merchant/products/:productId/status", requireMerchantAuth, async (req, res) => {
+router.patch("/merchant/products/status", requireMerchantAuth, async (req, res) => {
   const requestId = getRequestId(req);
 
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (!productId) {
+      res.status(400).json({
+        success: false,
+        message: "productId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     let nextActive: boolean | null = null;
 
@@ -1595,7 +2246,16 @@ const addMerchantAutoStockHandler = async (req: Request, res: Response): Promise
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (!productId) {
+      res.status(400).json({
+        success: false,
+        message: "productId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const rawCodes = Array.isArray(req.body?.codes) ? req.body.codes : null;
     if (!rawCodes || rawCodes.length === 0) {
@@ -1686,7 +2346,16 @@ const addMerchantManualStockHandler = async (req: Request, res: Response): Promi
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { productId } = req.params;
+    const productId = getQueryStringValue(req, "productId");
+
+    if (!productId) {
+      res.status(400).json({
+        success: false,
+        message: "productId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const quantity = req.body?.quantity;
     if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -1931,11 +2600,11 @@ const updateMerchantProductStockHandler = async (req: Request, res: Response): P
   });
 };
 
-router.patch("/merchant/products/:productId/stock", requireMerchantAuth, updateMerchantProductStockHandler);
-router.put("/merchant/products/:productId/stock", requireMerchantAuth, updateMerchantProductStockHandler);
+router.patch("/merchant/products/stock", requireMerchantAuth, updateMerchantProductStockHandler);
+router.put("/merchant/products/stock", requireMerchantAuth, updateMerchantProductStockHandler);
 
-router.post("/merchant/products/:productId/stock/auto", requireMerchantAuth, addMerchantAutoStockHandler);
-router.post("/merchant/products/:productId/stock/manual", requireMerchantAuth, addMerchantManualStockHandler);
+router.post("/merchant/products/stock/auto", requireMerchantAuth, addMerchantAutoStockHandler);
+router.post("/merchant/products/stock/manual", requireMerchantAuth, addMerchantManualStockHandler);
 
 router.get("/merchant/orders", requireMerchantAuth, async (req, res) => {
   const requestId = getRequestId(req);
@@ -1943,6 +2612,32 @@ router.get("/merchant/orders", requireMerchantAuth, async (req, res) => {
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
+    const orderId = getQueryStringValue(req, "orderId");
+
+    if (orderId) {
+      const walletsDB = getWalletsDB();
+      const catalogsDB = getCatalogsDB();
+
+      const order = await walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId });
+      if (!order) {
+        res.status(404).json({
+          success: false,
+          message: "Order not found or does not belong to this merchant",
+          requestId,
+        });
+        return;
+      }
+
+      const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+
+      res.status(200).json({
+        success: true,
+        message: "Order fetched successfully",
+        order: mapOrderForResponse(order, product),
+        requestId,
+      });
+      return;
+    }
 
     const status = typeof req.query.status === "string" ? req.query.status.trim() : "";
     const type = typeof req.query.type === "string" ? req.query.type.trim() : "";
@@ -2054,58 +2749,18 @@ router.get("/merchant/orders", requireMerchantAuth, async (req, res) => {
   }
 });
 
-router.get("/merchant/orders/:orderId", requireMerchantAuth, async (req, res) => {
-  const requestId = getRequestId(req);
-
-  try {
-    const merchantReq = req as MerchantAuthenticatedRequest;
-    const store = merchantReq.merchantStore!;
-    const { orderId } = req.params;
-
-    const walletsDB = getWalletsDB();
-    const catalogsDB = getCatalogsDB();
-
-    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId });
-    if (!order) {
-      res.status(404).json({
-        success: false,
-        message: "Order not found or does not belong to this merchant",
-        requestId,
-      });
-      return;
-    }
-
-    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
-
-    res.status(200).json({
-      success: true,
-      message: "Order fetched successfully",
-      order: mapOrderForResponse(order, product),
-      requestId,
-    });
-  } catch (error) {
-    logger.error({ err: error, requestId }, "Failed to fetch merchant order");
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch merchant order",
-      requestId,
-    });
-  }
-});
-
 const addMerchantOrderCodesHandler = async (req: Request, res: Response): Promise<void> => {
   const requestId = getRequestId(req);
 
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const orderIdParam = (req.params as { orderId?: string | string[] }).orderId;
-    const orderId = Array.isArray(orderIdParam) ? orderIdParam[0] : orderIdParam;
+    const orderId = getQueryStringValue(req, "orderId");
 
     if (!orderId?.trim()) {
       res.status(400).json({
         success: false,
-        message: "orderId is required",
+        message: "orderId query parameter is required",
         requestId,
       });
       return;
@@ -2238,6 +2893,23 @@ const addMerchantOrderCodesHandler = async (req: Request, res: Response): Promis
 
     const updatedCodesCount = (updatedOrder?.codes || []).length;
 
+    const canAutoComplete = Boolean(
+      updatedOrder
+      && product
+      && product.type !== "Manual"
+      && updatedOrder.status === "pending"
+      && updatedCodesCount >= updatedOrder.quantity
+    );
+
+    if (canAutoComplete) {
+      if (typeof req.body?.fulfilmentNote !== "string" || req.body.fulfilmentNote.trim().length === 0) {
+        req.body.fulfilmentNote = "Auto-completed after all required codes were delivered";
+      }
+
+      await completeMerchantOrderHandler(req, res);
+      return;
+    }
+
     res.status(200).json({
       success: true,
       message: `${trimmedCodes.length} code(s) added to order successfully`,
@@ -2263,7 +2935,16 @@ const completeMerchantOrderHandler = async (req: Request, res: Response): Promis
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { orderId } = req.params;
+    const orderId = getQueryStringValue(req, "orderId");
+
+    if (!orderId) {
+      res.status(400).json({
+        success: false,
+        message: "orderId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const fulfilmentNote = typeof req.body?.fulfilmentNote === "string" ? req.body.fulfilmentNote.trim() : "";
     if (fulfilmentNote.length > 2000) {
@@ -2277,8 +2958,13 @@ const completeMerchantOrderHandler = async (req: Request, res: Response): Promis
 
     const walletsDB = getWalletsDB();
     const catalogsDB = getCatalogsDB();
+    const db = getDB();
 
-    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId });
+    const [order, sellerUser] = await Promise.all([
+      walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId }),
+      db.collection<User>("users").findOne({ id: store.userId }),
+    ]);
+
     if (!order) {
       res.status(404).json({
         success: false,
@@ -2288,22 +2974,87 @@ const completeMerchantOrderHandler = async (req: Request, res: Response): Promis
       return;
     }
 
-    if (order.status !== "pending") {
+    if (order.sellerId !== store.userId || order.storeId !== store.storeId) {
+      res.status(403).json({
+        success: false,
+        message: "You can only complete orders that belong to your merchant store",
+        requestId,
+      });
+      return;
+    }
+
+    const product = await catalogsDB.collection<Product>("Products").findOne({ productId: order.productId });
+    if (!product) {
+      res.status(404).json({
+        success: false,
+        message: "Product not found for this order",
+        requestId,
+      });
+      return;
+    }
+
+    const isManual = product.type === "Manual";
+    const normalizedStatus = order.status.trim().toLowerCase();
+    const completionEligibleStatuses = new Set(["pending", "billed", "pending_payment", "pending_fulfillment"]);
+
+    if (normalizedStatus === "completed") {
       res.status(409).json({
         success: false,
-        message: `Only pending orders can be completed. Current status: ${order.status}`,
+        message: "Order is already completed",
+        requestId,
+      });
+      return;
+    }
+
+    if (normalizedStatus === "refunded" || normalizedStatus === "cancelled" || normalizedStatus === "disputed") {
+      res.status(409).json({
+        success: false,
+        message: `Order cannot be completed from status: ${order.status}`,
+        requestId,
+      });
+      return;
+    }
+
+    const isPendingLikeStatus = completionEligibleStatuses.has(normalizedStatus) || normalizedStatus.startsWith("pending");
+
+    if (!isPendingLikeStatus) {
+      res.status(409).json({
+        success: false,
+        message: `Only pending or billed orders can be completed. Current status: ${order.status}`,
+        requestId,
+      });
+      return;
+    }
+
+    if (isManual && normalizedStatus !== "billed") {
+      res.status(409).json({
+        success: false,
+        message: `Manual orders can only be completed from billed status. Current status: ${order.status}`,
+        requestId,
+      });
+      return;
+    }
+
+    const cleanCode = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    if (cleanCode.length > 2000) {
+      res.status(400).json({
+        success: false,
+        message: "code must be at most 2000 characters",
         requestId,
       });
       return;
     }
 
     const now = new Date().toISOString();
-    const releasedAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-    await walletsDB.collection<Balance>("Balances").updateOne(
-      { userId: order.sellerId },
-      { $inc: { suspendedBalance: order.amount } }
-    );
+    const nextCodes = cleanCode ? [...(order.codes || []), cleanCode] : (order.codes || []);
+
+    if (!isManual) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: order.amount } }
+      );
+    }
 
     if (order.buyerTransactionId) {
       await walletsDB.collection<Transaction>("Transactions").updateOne(
@@ -2322,23 +3073,55 @@ const completeMerchantOrderHandler = async (req: Request, res: Response): Promis
       {
         $set: {
           status: "completed",
+          codes: nextCodes,
           fulfilledAt: now,
           fulfilledBy: store.userId,
           fulfilmentNote: fulfilmentNote || null,
           statusUpdatedAt: now,
-          releasedAt,
         },
       }
     );
 
-    const [updatedOrder, product] = await Promise.all([
-      walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId }),
-      catalogsDB.collection<Product>("Products").findOne({ productId: order.productId }),
-    ]);
+    const updatedOrder = await walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId });
+
+    await recordAuditEvent({
+      eventName: "ADMIN_ACTION",
+      category: "admin_action",
+      outcome: "success",
+      actorType: "user",
+      actorId: store.userId,
+      requestId,
+      targetType: "order",
+      targetId: order.orderId,
+      metadata: {
+        action: "MERCHANT_OVERRIDE_COMPLETE_ORDER",
+        actorStoreId: store.storeId,
+        actorSellerId: store.userId,
+        previousStatus: order.status,
+        newStatus: "completed",
+        orderType: order.type,
+      },
+    });
+
+    if (updatedOrder) {
+      await sendMerchantCompletionEmails({
+        db,
+        walletsDB,
+        order: updatedOrder,
+        product,
+        store,
+        sellerUser,
+        fulfilledAt: now,
+        fulfilmentNote,
+        deliveredCodes: nextCodes.map((code) => decryptCodeOrPlain(code)),
+      });
+    }
 
     res.status(200).json({
       success: true,
-      message: "Order marked as completed; payout countdown started",
+      message: isManual
+        ? "Manual order fulfilled successfully"
+        : "Order marked as completed; payout countdown started",
       order: updatedOrder ? mapOrderForResponse(updatedOrder, product) : null,
       requestId,
     });
@@ -2358,7 +3141,16 @@ const refundMerchantOrderHandler = async (req: Request, res: Response): Promise<
   try {
     const merchantReq = req as MerchantAuthenticatedRequest;
     const store = merchantReq.merchantStore!;
-    const { orderId } = req.params;
+    const orderId = getQueryStringValue(req, "orderId");
+
+    if (!orderId) {
+      res.status(400).json({
+        success: false,
+        message: "orderId query parameter is required",
+        requestId,
+      });
+      return;
+    }
 
     const walletsDB = getWalletsDB();
     const catalogsDB = getCatalogsDB();
@@ -2381,6 +3173,7 @@ const refundMerchantOrderHandler = async (req: Request, res: Response): Promise<
         requestId,
       });
       return;
+      
     }
 
     if (order.isReleased) {
@@ -2493,10 +3286,42 @@ const refundMerchantOrderHandler = async (req: Request, res: Response): Promise<
       { $set: { status: "refunded", isReleased: true, statusUpdatedAt: now } }
     );
 
-    const [updatedOrder, product] = await Promise.all([
+    const [updatedOrder, product, sellerUser] = await Promise.all([
       walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId }),
       catalogsDB.collection<Product>("Products").findOne({ productId: order.productId }),
+      db.collection<User>("users").findOne({ id: store.userId }),
     ]);
+
+    await recordAuditEvent({
+      eventName: "ADMIN_ACTION",
+      category: "admin_action",
+      outcome: "success",
+      actorType: "user",
+      actorId: store.userId,
+      requestId,
+      targetType: "order",
+      targetId: order.orderId,
+      metadata: {
+        action: "MERCHANT_REFUND_ORDER",
+        actorStoreId: store.storeId,
+        actorSellerId: store.userId,
+        previousStatus: order.status,
+        newStatus: "refunded",
+        orderType: order.type,
+        refundAmount: order.totalAmount,
+      },
+    });
+
+    if (updatedOrder && product) {
+      await sendMerchantRefundEmails({
+        db,
+        walletsDB,
+        order: updatedOrder,
+        product,
+        refundedAt: now,
+        refundAmount: order.totalAmount,
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -2509,6 +3334,223 @@ const refundMerchantOrderHandler = async (req: Request, res: Response): Promise<
     res.status(500).json({
       success: false,
       message: "Failed to refund merchant order",
+      requestId,
+    });
+  }
+};
+
+const cancelMerchantOrderHandler = async (req: Request, res: Response): Promise<void> => {
+  const requestId = getRequestId(req);
+
+  try {
+    const merchantReq = req as MerchantAuthenticatedRequest;
+    const store = merchantReq.merchantStore!;
+    const orderId = getQueryStringValue(req, "orderId");
+
+    if (!orderId) {
+      res.status(400).json({
+        success: false,
+        message: "orderId query parameter is required",
+        requestId,
+      });
+      return;
+    }
+
+    const declineReason = typeof req.body?.declineReason === "string" ? req.body.declineReason.trim() : "";
+    if (declineReason.length > 2000) {
+      res.status(400).json({
+        success: false,
+        message: "declineReason must be at most 2000 characters",
+        requestId,
+      });
+      return;
+    }
+
+    const walletsDB = getWalletsDB();
+    const catalogsDB = getCatalogsDB();
+    const db = getDB();
+
+    const order = await walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId });
+    if (!order) {
+      res.status(404).json({
+        success: false,
+        message: "Order not found or does not belong to this merchant",
+        requestId,
+      });
+      return;
+    }
+
+    if (order.sellerId !== store.userId || order.storeId !== store.storeId) {
+      res.status(403).json({
+        success: false,
+        message: "You can only cancel orders that belong to your merchant store",
+        requestId,
+      });
+      return;
+    }
+
+    const normalizedStatus = order.status.trim().toLowerCase();
+    const isPendingLikeStatus = normalizedStatus === "pending" || normalizedStatus.startsWith("pending");
+    const canCancelStatus = isPendingLikeStatus || normalizedStatus === "billed" || normalizedStatus === "completed";
+
+    if (normalizedStatus === "cancelled") {
+      res.status(409).json({
+        success: false,
+        message: "Order is already cancelled",
+        requestId,
+      });
+      return;
+    }
+
+    if (normalizedStatus === "refunded") {
+      res.status(409).json({
+        success: false,
+        message: "Order has already been refunded and cannot be cancelled",
+        requestId,
+      });
+      return;
+    }
+
+    if (normalizedStatus === "disputed") {
+      res.status(409).json({
+        success: false,
+        message: "Disputed orders cannot be cancelled via this endpoint",
+        requestId,
+      });
+      return;
+    }
+
+    if (!canCancelStatus) {
+      res.status(409).json({
+        success: false,
+        message: `Order cannot be cancelled from status: ${order.status}`,
+        requestId,
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    if (order.isReleased || order.releasedAt <= now) {
+      res.status(400).json({
+        success: false,
+        message: "Cannot cancel because the order is already released",
+        requestId,
+      });
+      return;
+    }
+
+    const isAnonBuyer = order.buyerId === "anon-gameket-id";
+
+    if (!isAnonBuyer) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.buyerId },
+        { $inc: { availableBalance: order.totalAmount } }
+      );
+    }
+
+    if (order.isReleased) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { availableBalance: -order.amount } }
+      );
+    } else if (!isPendingLikeStatus) {
+      await walletsDB.collection<Balance>("Balances").updateOne(
+        { userId: order.sellerId },
+        { $inc: { suspendedBalance: -order.amount } }
+      );
+    }
+
+    if (order.buyerTransactionId) {
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: order.buyerTransactionId },
+        { $set: { status: "refunded" } }
+      );
+    }
+
+    if (order.sellerTransactionId) {
+      await walletsDB.collection<Transaction>("Transactions").updateOne(
+        { id: order.sellerTransactionId },
+        { $set: { status: "refunded" } }
+      );
+    }
+
+    if (!isAnonBuyer) {
+      const buyerRefundTxnId = crypto.randomBytes(24).toString("base64").replace(/[+/=]/g, "");
+      await walletsDB.collection<Transaction>("Transactions").insertOne({
+        userId: order.buyerId,
+        id: buyerRefundTxnId,
+        type: "Refund",
+        status: "completed",
+        method: "balance",
+        amount: order.totalAmount,
+        createdAt: now,
+      } as Transaction);
+    }
+
+    await walletsDB.collection<Order>("Orders").updateOne(
+      { orderId, sellerId: store.userId },
+      {
+        $set: {
+          status: "cancelled",
+          isReleased: true,
+          declinedAt: now,
+          declineReason: declineReason || "Order cancelled by merchant",
+          statusUpdatedAt: now,
+        },
+      }
+    );
+
+    const updatedStore = await catalogsDB.collection<Store>("Stores").findOneAndUpdate(
+      { storeId: order.storeId },
+      { $inc: { totalSales: -order.quantity } },
+      { returnDocument: "after" }
+    );
+
+    if (updatedStore) {
+      const newRank = getRankFromSales(updatedStore.totalSales);
+      await db.collection<User>("users").updateOne(
+        { id: order.sellerId },
+        { $set: { rank: newRank } }
+      );
+    }
+
+    await recordAuditEvent({
+      eventName: "ADMIN_ACTION",
+      category: "admin_action",
+      outcome: "success",
+      actorType: "user",
+      actorId: store.userId,
+      requestId,
+      targetType: "order",
+      targetId: order.orderId,
+      metadata: {
+        action: "MERCHANT_CANCEL_ORDER",
+        actorStoreId: store.storeId,
+        actorSellerId: store.userId,
+        previousStatus: order.status,
+        newStatus: "cancelled",
+        isAnonBuyer,
+      },
+    });
+
+    const [updatedOrder, product] = await Promise.all([
+      walletsDB.collection<Order>("Orders").findOne({ orderId, sellerId: store.userId }),
+      catalogsDB.collection<Product>("Products").findOne({ productId: order.productId }),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: isAnonBuyer
+        ? "Order cancelled successfully. Guest refund must be processed manually."
+        : "Order cancelled and buyer refunded successfully",
+      order: updatedOrder ? mapOrderForResponse(updatedOrder, product) : null,
+      requestId,
+    });
+  } catch (error) {
+    logger.error({ err: error, requestId }, "Failed to cancel merchant order");
+    res.status(500).json({
+      success: false,
+      message: "Failed to cancel merchant order",
       requestId,
     });
   }
@@ -2529,21 +3571,28 @@ const updateMerchantOrderHandler = async (req: Request, res: Response): Promise<
     return;
   }
 
+  if (statusRaw === "cancel" || statusRaw === "cancelled") {
+    req.body.status = "cancelled";
+    await cancelMerchantOrderHandler(req, res);
+    return;
+  }
+
   const requestId = getRequestId(req);
   res.status(400).json({
     success: false,
-    message: "status must be either completed or refunded",
+    message: "status must be either completed, refunded, or cancelled",
     requestId,
   });
 };
 
-router.patch("/merchant/orders/:orderId", requireMerchantAuth, updateMerchantOrderHandler);
-router.put("/merchant/orders/:orderId", requireMerchantAuth, updateMerchantOrderHandler);
+router.patch("/merchant/orders", requireMerchantAuth, updateMerchantOrderHandler);
+router.put("/merchant/orders", requireMerchantAuth, updateMerchantOrderHandler);
 
-router.post("/merchant/orders/:orderId/codes", requireMerchantAuth, addMerchantOrderCodesHandler);
-router.patch("/merchant/orders/:orderId/codes", requireMerchantAuth, addMerchantOrderCodesHandler);
+router.post("/merchant/orders/codes", requireMerchantAuth, addMerchantOrderCodesHandler);
+router.patch("/merchant/orders/codes", requireMerchantAuth, addMerchantOrderCodesHandler);
 
-router.post("/merchant/orders/:orderId/complete", requireMerchantAuth, completeMerchantOrderHandler);
-router.post("/merchant/orders/:orderId/refund", requireMerchantAuth, refundMerchantOrderHandler);
+router.post("/merchant/orders/complete", requireMerchantAuth, completeMerchantOrderHandler);
+router.post("/merchant/orders/refund", requireMerchantAuth, refundMerchantOrderHandler);
+router.post("/merchant/orders/cancel", requireMerchantAuth, cancelMerchantOrderHandler);
 
 export default router;

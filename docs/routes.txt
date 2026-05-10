@@ -1,0 +1,46 @@
+Merchant REST APIs
+==================
+
+Authentication
+POST /merchant/auth/check
+  Body: { apiKey: string, secret: string }
+  Returns: { token, tokenType: "Bearer", expiresInSeconds, expiresAt, merchant }
+
+Merchant Profile
+GET /merchant
+GET /merchant/me
+
+Products
+GET /merchant/products
+  Optional query params: productId, type, isApi, isActive, search, page, limit
+POST /merchant/products
+PATCH /merchant/products?productId={productId}
+PUT /merchant/products?productId={productId}
+DELETE /merchant/products?productId={productId}
+PATCH /merchant/products/callback-url?productId={productId}
+PATCH /merchant/products/status?productId={productId}
+PATCH /merchant/products/stock?productId={productId}
+PUT /merchant/products/stock?productId={productId}
+POST /merchant/products/stock/auto?productId={productId}
+POST /merchant/products/stock/manual?productId={productId}
+
+Orders
+GET /merchant/orders
+  Optional query params: orderId, status, type, from, to, page, limit
+PATCH /merchant/orders?orderId={orderId}
+PUT /merchant/orders?orderId={orderId}
+POST /merchant/orders/codes?orderId={orderId}
+PATCH /merchant/orders/codes?orderId={orderId}
+POST /merchant/orders/complete?orderId={orderId}
+POST /merchant/orders/refund?orderId={orderId}
+POST /merchant/orders/cancel?orderId={orderId}
+
+Notes
+- Product and order identifiers are passed as query parameters, not path segments.
+- Protected endpoints require both headers: x-merchant-api-key and Authorization: Bearer {token}.
+- Merchant access tokens are valid for 2 hours and can be re-issued via /merchant/auth/check.
+- Write endpoints also require Idempotency-Key.
+- /merchant/orders/codes auto-completes eligible non-manual orders when delivered codes reach required quantity.
+- /merchant/orders/complete is a merchant override endpoint and does not require codes to complete an eligible order.
+- /merchant/orders/complete allows only pending or billed states, rejects completed/refunded/cancelled/disputed, and only for the owning merchant seller/store.
+- /merchant/orders/cancel cancels eligible merchant orders, reverses financial state, and refunds registered buyers.

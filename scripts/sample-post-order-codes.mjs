@@ -27,51 +27,26 @@ if (codes.length === 0) {
 }
 
 const method = "POST";
-const path = `/merchant/orders/${orderId}/codes`;
+const path = "/merchant/orders/codes";
+const query = new URLSearchParams({ orderId }).toString();
+const requestTarget = `${path}?${query}`;
 const body = { codes };
-const timestamp = `${Date.now()}`;
-const nonce = crypto.randomUUID().replace(/-/g, "");
 const idempotencyKey = crypto.randomUUID();
 
-function stableStringify(value) {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-
-  const entries = Object.entries(value)
-    .filter(([, itemValue]) => itemValue !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b));
-
-  const serializedEntries = entries.map(([key, itemValue]) => `${JSON.stringify(key)}:${stableStringify(itemValue)}`);
-  return `{${serializedEntries.join(",")}}`;
-}
-
-function sha256Hex(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
-function hmacSha256Hex(secret, payload) {
-  return crypto.createHmac("sha256", secret).update(payload).digest("hex");
-}
-
-const canonicalBody = stableStringify(body);
-const bodyHash = sha256Hex(canonicalBody);
-const payload = [method, path, timestamp, nonce, bodyHash].join("\n");
-const signature = hmacSha256Hex(merchantSecret, payload);
-
-const url = `${baseUrl}${path}`;
+const url = `${baseUrl}${requestTarget}`;
+const authUrl = `${baseUrl}/merchant/auth/check`;
 const headers = {
   "Content-Type": "application/json",
   "x-merchant-api-key": merchantApiKey,
-  "x-merchant-timestamp": timestamp,
-  "x-merchant-nonce": nonce,
-  "x-merchant-signature": signature,
+  "Authorization": "Bearer <paste-token-here>",
   "Idempotency-Key": idempotencyKey,
 };
+
+console.log("Step 1: Issue token");
+console.log("Method: POST");
+console.log("URL:", authUrl);
+console.log("Body:");
+console.log(JSON.stringify({ apiKey: merchantApiKey, secret: merchantSecret }, null, 2));
 
 console.log("Method:", method);
 console.log("URL:", url);
@@ -85,6 +60,3 @@ for (const [key, value] of Object.entries(headers)) {
 
 console.log("\nHeaders as JSON:");
 console.log(JSON.stringify(headers, null, 2));
-
-console.log("\nRaw payload used for signature:");
-console.log(payload);

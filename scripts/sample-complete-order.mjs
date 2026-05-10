@@ -17,7 +17,9 @@ const orderId = process.env.ORDER_ID;
 const fulfilmentNote = process.env.FULFILMENT_NOTE || "Order delivered successfully";
 
 const method = "POST";
-const path = `/merchant/orders/${orderId}/complete`;
+const path = "/merchant/orders/complete";
+const query = new URLSearchParams({ orderId }).toString();
+const requestTarget = `${path}?${query}`;
 const body = { fulfilmentNote };
 const timestamp = `${Date.now()}`;
 const nonce = crypto.randomUUID().replace(/-/g, "");
@@ -50,10 +52,10 @@ function hmacSha256Hex(secret, payload) {
 
 const canonicalBody = stableStringify(body);
 const bodyHash = sha256Hex(canonicalBody);
-const payload = [method, path, timestamp, nonce, bodyHash].join("\n");
+const payload = [method, requestTarget, timestamp, nonce, bodyHash].join("\n");
 const signature = hmacSha256Hex(merchantSecret, payload);
 
-const url = `${baseUrl}${path}`;
+const url = `${baseUrl}${requestTarget}`;
 const headers = {
   "Content-Type": "application/json",
   "x-merchant-api-key": merchantApiKey,

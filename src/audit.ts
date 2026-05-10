@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
-import { getDB } from "./db.js";
+import { getDB, getLogsDB } from "./db.js";
 import { logger } from "./logger.js";
+import type { AdminLogAction, AdminLog } from "./types.js";
 
 const AUDIT_EVENT_NAMES = [
   "LOGIN_SUCCESS",
@@ -140,8 +141,68 @@ export const recordAuditEvent = async (input: AuditEventInput): Promise<void> =>
     };
 
     // Append-only by design: audit entries are only inserted, never updated/deleted.
-    await getDB().collection<AuditLogDocument>("AuditLogs").insertOne(doc);
+    await getLogsDB().collection<AuditLogDocument>("AuditLogs").insertOne(doc);
   } catch (err) {
     logger.error({ err, eventName: input.eventName }, "Failed to record audit event");
+  }
+};
+
+export interface RecordAdminLogInput {
+  adminId: string | null; // adminId for admin actions, supportId for support actions
+  adminType: "admin" | "support";
+  action: AdminLogAction;
+  status: "success" | "failure";
+  targetType: string;
+  targetId: string | null;
+  details: string;
+  changes?: Record<string, { before?: unknown; after?: unknown }>;
+  metadata?: Record<string, unknown>;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export const recordAdminLog = async (input: RecordAdminLogInput): Promise<void> => {
+  try {
+    if (!input.adminType || !["admin", "support"].includes(input.adminType)) {
+      throw new Error("adminType must be 'admin' or 'support'");
+    }
+
+    if (!input.action) {
+      throw new Error("action is required");
+    }
+
+    if (!["success", "failure"].includes(input.status)) {
+      throw new Error("status must be 'success' or 'failure'");
+    }
+
+    if (!input.targetType) {
+      throw new Error("targetType is required");
+    }
+
+    if (!input.details) {
+      throw new Error("details is required");
+    }
+
+    const now = new Date().toISOString();
+    const doc: AdminLog = {
+      logId: randomUUID(),
+      adminId: input.adminId,
+      adminType: input.adminType,
+      action: input.action,
+      status: input.status,
+      targetType: input.targetType,
+      targetId: input.targetId ?? null,
+      details: input.details,
+      changes: input.changes,
+      metadata: input.metadata,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      createdAt: now,
+    };
+
+    // Append-only by design: admin logs are only inserted, never updated/deleted.
+    await getLogsDB().collection<AdminLog>("AdminLogs").insertOne(doc);
+  } catch (err) {
+    logger.error({ err, action: input.action }, "Failed to record admin log");
   }
 };

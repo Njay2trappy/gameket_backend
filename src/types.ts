@@ -346,3 +346,45 @@ export interface AuditLog {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
+
+export type AdminLogAction =
+  | "ADMIN_LOGIN"
+  | "ADMIN_LOGIN_FAILURE"
+  | "SUPPORT_LOGIN"
+  | "SUPPORT_LOGIN_FAILURE"
+  | "USER_SUSPEND"
+  | "USER_ACTIVATE"
+  | "SUPPORT_ADD"
+  | "SUPPORT_SUSPEND"
+  | "OFFICIAL_STORE_CREATE"
+  | "PRODUCT_CREATE"
+  | "PRODUCT_UPDATE"
+  | "PRODUCT_DELETE"
+  | "PRODUCT_ENABLE"
+  | "PRODUCT_DISABLE"
+  | "PRODUCT_CODE_ADD"
+  | "PRODUCT_CODE_DELETE"
+  | "PRODUCT_ADVERTISE"
+  | "STORE_ADVERTISE"
+  | "DISPUTE_UPDATE"
+  | "DISPUTE_SET_STATUS"
+  | "DISPUTE_RESOLVE"
+  | "REFUND_BUYER"
+  | "WITHDRAWAL_APPROVE"
+  | "WITHDRAWAL_DECLINE";
+
+export interface AdminLog {
+  logId: string;
+  adminId: string | null; // adminId for admin actions, supportId for support actions
+  adminType: "admin" | "support";
+  action: AdminLogAction;
+  status: "success" | "failure";
+  targetType: string; // user, support, product, dispute, withdrawal, store, order, etc.
+  targetId: string | null;
+  details: string; // description of what happened
+  changes?: Record<string, { before?: unknown; after?: unknown }>; // for tracking what changed
+  metadata?: Record<string, unknown>; // additional context
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt: string;
+}
