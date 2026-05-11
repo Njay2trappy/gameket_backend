@@ -12,11 +12,12 @@ import { join } from "path";
 import { getDB, getWalletsDB, getCatalogsDB } from "../../db.js";
 import { recordAuditEvent } from "../../audit.js";
 import { logger } from "../../logger.js";
-import type { User, Account, Balance, Store } from "../../types.js";
+import type { User, Account, Balance, Store, Premium } from "../../types.js";
 import type { Context } from "../../index.js";
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const TWO_FACTOR_ISSUER = (process.env.TWO_FACTOR_ISSUER || "Gameket").trim();
+const FREE_PREMIUM_TRIAL_DAYS = 7;
 
 const smtpTransporter = nodemailer.createTransport({
   host: "gameket.io",
@@ -178,6 +179,23 @@ const loginFailureResponse = (code: number, message: string) => ({
 
 export const authQueries = {};
 
+const grantSignupPremiumTrial = async (
+  db: ReturnType<typeof getDB>,
+  userId: string,
+  subscribedAtIso: string
+): Promise<void> => {
+  const expiresAt = new Date(new Date(subscribedAtIso).getTime() + FREE_PREMIUM_TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const premiumRecord: Premium = {
+    userId,
+    subscribedAt: subscribedAtIso,
+    expiresAt,
+    isActive: true,
+  };
+
+  await db.collection<Premium>("Premium").insertOne(premiumRecord);
+};
+
 export const authMutations = {
   register: async (
     _: unknown,
@@ -255,6 +273,8 @@ export const authMutations = {
     const registered = new Date().toISOString().split("T")[0];
     const hashedPassword = await bcrypt.hash(password, 12);
 
+    const nowIso = new Date().toISOString();
+
     const user: User = {
       id: userId,
       username,
@@ -264,7 +284,7 @@ export const authMutations = {
       isActive: true,
       isSuspended: false,
       isVerified: false,
-      isPremium: false,
+      isPremium: true,
       rank: 1,
       registered,
       isStore: false,
@@ -316,7 +336,7 @@ export const authMutations = {
       isApproved: false,
       approveStatus: null,
       isPromoted: false,
-      type: "basic",
+      type: "premium",
       totalSales: 0,
       positiveReviews: 0,
       negativeReviews: 0,
@@ -326,6 +346,7 @@ export const authMutations = {
     };
 
     await stores.insertOne(store);
+    await grantSignupPremiumTrial(db, userId, nowIso);
 
     // Generate verification token valid for 15 minutes
     const verificationToken = randomBytes(24).toString("hex");
@@ -635,6 +656,8 @@ export const authMutations = {
     const userId = uuidv4();
     const registered = new Date().toISOString().split("T")[0];
 
+    const nowIso = new Date().toISOString();
+
     const user: User = {
       id: userId,
       username,
@@ -644,7 +667,7 @@ export const authMutations = {
       isActive: true,
       isSuspended: false,
       isVerified: true,
-      isPremium: false,
+      isPremium: true,
       rank: 1,
       registered,
       isStore: false,
@@ -690,7 +713,7 @@ export const authMutations = {
       isApproved: false,
       approveStatus: null,
       isPromoted: false,
-      type: "basic",
+      type: "premium",
       totalSales: 0,
       positiveReviews: 0,
       negativeReviews: 0,
@@ -698,6 +721,8 @@ export const authMutations = {
       createdAt: registered,
       requestCount: 0,
     });
+
+    await grantSignupPremiumTrial(db, userId, nowIso);
 
     const token = issueLoginToken(user, 1);
 
