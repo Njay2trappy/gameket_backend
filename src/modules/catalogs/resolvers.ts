@@ -1611,7 +1611,7 @@ export const catalogsQueries = {
 export const catalogsMutations = {
   addProduct: async (
     _: unknown,
-    { input }: { input: { catalog: string; category: string; region: string; name: string; description: string; marketPrice: number; price: number; type: string } },
+    { input }: { input: { catalog: string; category: string; region: string; name: string; description: string; marketPrice: number; price: number; type: string; isAPI?: boolean } },
     context: Context
   ) => {
     if (!context.user) {
@@ -1686,6 +1686,7 @@ export const catalogsMutations = {
 
     // Validate type
     const productType = input.type;
+    const isApiProduct = Boolean(input.isAPI);
     if (productType !== "Auto" && productType !== "Manual") {
       return { code: 400, success: false, message: "Type must be either 'Auto' or 'Manual'", product: null };
     }
@@ -1729,7 +1730,7 @@ export const catalogsMutations = {
       type: productType as "Auto" | "Manual",
       isActive: false,
       isPromoted: false,
-      isAPI: false,
+      isAPI: isApiProduct,
       apiCallbackUrl: null,
       available: 0,
       sold: 0,

@@ -2457,7 +2457,7 @@ export const adminMutations = {
     };
   },
 
-  AdminAddProduct: async (_: unknown, { input }: { input: { catalog: string; category: string; region: string; name: string; description: string; marketPrice: number; price: number; discount: number; type: "Auto" | "Manual"; codes?: string[] } }, context: Context) => {
+  AdminAddProduct: async (_: unknown, { input }: { input: { catalog: string; category: string; region: string; name: string; description: string; marketPrice: number; price: number; discount: number; type: "Auto" | "Manual"; codes?: string[]; isAPI?: boolean } }, context: Context) => {
     if (!context.user || context.user.role !== "admin") {
       throw new GraphQLError("Admin access required", {
         extensions: { code: "UNAUTHENTICATED" },

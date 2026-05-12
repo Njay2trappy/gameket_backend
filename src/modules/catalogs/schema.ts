@@ -343,6 +343,7 @@ export const catalogsTypeDefs = `#graphql
     marketPrice: Float!
     price: Float!
     type: ProductType!
+    isAPI: Boolean
   }
 
   type AddProductResponse {

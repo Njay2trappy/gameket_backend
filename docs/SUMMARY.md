@@ -35,6 +35,13 @@
   - [Refund Order](merchant-api/orders.md#refund-order)
   - [Cancel Order](merchant-api/orders.md#cancel-order)
 
+- [API Fulfillment Callbacks](merchant-api/api-fulfillment-callbacks.md)
+  - [Callback Payload](merchant-api/api-fulfillment-callbacks.md#callback-payload)
+  - [Signature Verification](merchant-api/api-fulfillment-callbacks.md#signature-verification)
+  - [Verification Examples](merchant-api/api-fulfillment-callbacks.md#verification-examples)
+  - [Responding to Callbacks](merchant-api/api-fulfillment-callbacks.md#responding-to-callbacks)
+  - [After Receiving a Callback](merchant-api/api-fulfillment-callbacks.md#after-receiving-a-callback)
+
 - [Rate Limiting](merchant-api/rate-limiting.md)
   - [General Rate Limits](merchant-api/rate-limiting.md#general-rate-limits)
   - [Token Issuance Limits](merchant-api/rate-limiting.md#token-issuance-limits)
