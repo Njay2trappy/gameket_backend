@@ -1,0 +1,42 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gameket-backend
+    restart: unless-stopped
+    networks:
+      - gameket
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=gameket-network"
+      - "traefik.http.routers.gameket-backend.rule=Host(`api.gameket.io`)"
+      - "traefik.http.routers.gameket-backend.entrypoints=websecure"
+      - "traefik.http.routers.gameket-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.gameket-backend.loadbalancer.server.port=4000"
+    environment:
+      PORT: ${PORT:-4000}
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MONGODB_URI: ${MONGODB_URI}
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+      SUPPORT_JWT_SECRET: ${SUPPORT_JWT_SECRET}
+      MERCHANT_JWT_SECRET: ${MERCHANT_JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      TWO_FACTOR_ENCRYPTION_KEY: ${TWO_FACTOR_ENCRYPTION_KEY}
+      TWO_FACTOR_ISSUER: ${TWO_FACTOR_ISSUER:-Gameket}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GAMEKET_PAY_API_KEY: ${GAMEKET_PAY_API_KEY:-}
+      IMGBB_API_KEY: ${IMGBB_API_KEY:-}
+      SMTP_EMAIL: ${SMTP_EMAIL:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      EMAIL_KEY: ${EMAIL_KEY:-}
+      CONFIRM_EMAIL_URL: ${CONFIRM_EMAIL_URL:-https://shop.gameket.io/auth/confirm-email}
+
+networks:
+  gameket:
+    external: true
+    name: gameket-network
