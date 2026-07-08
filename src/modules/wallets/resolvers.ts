@@ -2451,7 +2451,7 @@ export const walletsMutations = {
 
     let paymentResponse;
     try {
-      const res = await fetch("https://api.pay.gameket.io/create-payment", {
+      const res = await fetch("https://api.argonpay.app/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey, amount: totalCharged }),
@@ -3672,7 +3672,7 @@ export const walletsMutations = {
 
     let paymentResponse;
     try {
-      const res = await fetch("https://api.pay.gameket.io/create-payment", {
+      const res = await fetch("https://api.argonpay.app/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey, amount: totalAmount }),
@@ -3880,7 +3880,7 @@ export const walletsMutations = {
 
     let paymentResponse;
     try {
-      const res = await fetch("https://api.pay.gameket.io/create-payment", {
+      const res = await fetch("https://api.argonpay.app/create-payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey, amount: totalAmount }),
